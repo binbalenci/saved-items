@@ -2,6 +2,8 @@
 
 Benjamin's saved links from Facebook, Instagram, Threads, X, Reddit, Chrome and the web, in one place.
 
+New session? Start with [docs/handoff.md](docs/handoff.md).
+
 ```
 Phone share sheet → Telegram bot → worker/ (Cloudflare Worker) → D1 `saved-items`
                                                    ▲                 ▲
