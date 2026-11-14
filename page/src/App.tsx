@@ -348,7 +348,7 @@ function DigestView({ mcp }: { mcp: Mcp | null | undefined }) {
       <main>
         <div className="empty">
           <h2>No digest yet</h2>
-          <p>Every Friday morning the weekly task looks at what you saved and writes a digest. It shows up here and in Telegram at 06:32.</p>
+          <p>Every Friday morning Claude looks at what you saved that week and writes a digest. It shows up here and in Telegram at 06:32.</p>
         </div>
       </main>
     );

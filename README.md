@@ -6,7 +6,7 @@ Benjamin's saved links from Facebook, Instagram, Threads, X, Reddit, Chrome and 
 Phone share sheet → Telegram bot → worker/ (Cloudflare Worker) → D1 `saved-items`
                                                    ▲                 ▲
           Friday 06:32 digest ◄────────────────────┘                 │
-          Weekly Claude scheduled task (docs/weekly-task.md) ────────┤ fills text, tags, dead links, writes digest
+          Daily Claude scheduled task (docs/daily-task.md)   ────────┤ fills text, tags, dead links, writes digest
           claude.ai artifact (page/) ────────────────────────────────┘ search, star, edit, delete, Ask my saves
 ```
 
@@ -14,7 +14,7 @@ Phone share sheet → Telegram bot → worker/ (Cloudflare Worker) → D1 `saved
 |---|---|---|
 | `worker/` | Cloudflare Worker `saved-items-bot` | Telegram webhook, owner-only, `/find`, Friday digest sender |
 | `page/` | claude.ai artifact https://claude.ai/artifact/7E56swkPzkP29qdoDt7xZb | React + Parcel; reads D1 via the viewer's Cloudflare connector |
-| `docs/weekly-task.md` | Claude scheduled task "🔖 Saved items: weekly fill-in + digest", Fridays 04:47 Helsinki | Keep the task prompt in sync with this file |
+| `docs/daily-task.md` | Claude scheduled task "🔖 Saved items: daily fill-in + Friday digest", daily 04:47 Helsinki | Keep the task prompt in sync with this file |
 | D1 | `saved-items`, id `eff1c7bb-ed60-48dd-9140-46047a637855` | Schema: `worker/migrations/0001_init.sql` |
 
 ## Worker setup (once)
