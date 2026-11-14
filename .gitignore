@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.parcel-cache/
+.wrangler/
+page/bundle.html
+page/artifact.html
+.dev.vars

@@ -1,0 +1,18 @@
+name = "saved-items-bot"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+# Secrets set in the Cloudflare dashboard stay put across deploys.
+keep_vars = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "saved-items"
+database_id = "eff1c7bb-ed60-48dd-9140-46047a637855"
+migrations_dir = "migrations"
+
+[triggers]
+# Friday 06:32 Helsinki = 04:32 UTC in winter, 03:32 UTC in summer. The Worker checks local time.
+crons = ["32 3 * * 5", "32 4 * * 5"]
+
+[observability]
+enabled = true
