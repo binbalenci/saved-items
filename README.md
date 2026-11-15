@@ -29,6 +29,8 @@ Phone share sheet → Telegram bot → worker/ (Cloudflare Worker) → D1 `saved
 4. Open `https://<worker-url>/setup?secret=<TELEGRAM_WEBHOOK_SECRET>` once. It registers the webhook.
 5. Send any message to the bot. It replies with your Telegram user ID. Add it as secret `TELEGRAM_ALLOWED_USER_ID`. From then on it answers only you.
 
+The Workers AI binding (`AI`) is declared in `worker/wrangler.toml` and needs no secret. It runs remotely, so run the Worker locally with `npx wrangler dev --remote`.
+
 ## Develop
 
 ```sh
