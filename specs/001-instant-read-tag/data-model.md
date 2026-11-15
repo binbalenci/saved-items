@@ -27,7 +27,7 @@ Produced per link by the Worker; drives the reply line and the update.
 |---|---|---|---|---|
 | `full` | snippet and ≥1 valid tag produced | title, snippet, tags, author | set | title, snippet, tags |
 | `partial` | something found but no snippet or no valid tag | whatever was found | null | what was found, and what is missing |
-| `unread` | login wall, removed or error page, timeout, non-HTML or too little text, fetch failure, deadline hit | nothing new | null | "couldn't read it" and why |
+| `unread` | login wall, removed or error page, timeout, non-HTML or too little text, fetch failure, deadline hit | a title, only if the page gave one and the row has none; never a snippet or tags | null | "couldn't read it" and why |
 | `known` | link already saved and fully read | nothing | unchanged | saved title, snippet, tags |
 
 Reasons carried for the `unread` line: `login`, `gone` (404/410 or a removed-post page),
@@ -35,7 +35,7 @@ Reasons carried for the `unread` line: `login`, `gone` (404/410 or a removed-pos
 
 ## Reply (one Telegram message set per user message)
 
-One line per link, in the order the links appear in the message (at most 10; extra links are
+One block per link, in the order the links appear in the message (at most 10; extra links are
 ignored as today). Long replies are split with the existing `chunk()` helper. Formats are in
 `contracts/bot-replies.md`.
 
@@ -59,11 +59,26 @@ shared ──► lookup by normalized shared URL
 Final states: `filled` (enriched_at set), `partial` or `unread` (left for the daily fill-in),
 which later become `filled` or stay as they are.
 
+Re-keying and deleting apply only to a row this invocation just created (`createdNow`). A row
+that already existed is never re-keyed or deleted.
+
+## Decision functions (pure, in `worker/src/lib.ts`, unit tested)
+
+| Function | Rule |
+|---|---|
+| `checkSender(allowedId, fromId)` | no `fromId` → `none`; unset or blank `allowedId` → `unconfigured`; id differs → `stranger`; id equals `allowedId` (trimmed) → `allowed` |
+| `linkState(existing)` | no row → `new`; row with `enriched_at` → `known`; row without it → `unfilled` |
+| `rekeyAction(currentKey, finalKey, otherRow, selfId, createdNow)` | `createdNow` false → `keep` (a pre-existing row is never deleted or re-keyed); keys equal → `keep`; another row (different id) holds `finalKey` → `merge-and-delete`; otherwise `update-key` |
+| `isEnriched(row)` | true only when `text` is non-empty and `tags` parses to an array of at least 1 |
+| `fillEmpty(existing, found)` | returns only fields to write: `title`, `text`, `author` when the existing value is null or empty; `tags` when it is `[]`; never `note` |
+
 ## Validation rules
 
 - Snippet: string, trimmed, 1–400 characters, original language. Over-long text is cut at 397
   and ends with `...`.
-- Tag: after lowercasing and trimming, spaces become `-`, characters outside `a-z0-9-` are
-  dropped, 2–30 characters. Duplicates removed, first 3 kept. A tag equal to an existing tag is
-  used as-is (FR-006).
+- Tag: lowercase and trim. Reject the whole tag, rather than cleaning it, if it contains
+  anything other than `a-z`, `0-9`, spaces and hyphens (so "học máy" and "c++" are dropped).
+  Then spaces become `-`, repeated `-` collapse, a leading or trailing `-` is removed, and the
+  length must be 2–30. Duplicates removed, first 3 kept. A tag equal to an existing tag is used
+  as-is (FR-006).
 - Anything in the model output other than `snippet` and `tags` is ignored.

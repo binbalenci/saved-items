@@ -109,14 +109,17 @@ items marked **verify** are checked in `quickstart.md`.
   the new row's key.
 - **Rationale**: FR-001 says a reading failure can never lose a save, and the spec says short
   links must resolve to the same entry as the full link (existing behavior via `pickNorm`).
-  Deleting is limited to the row created seconds earlier in the same invocation.
+  Deleting is limited to the row created seconds earlier in the same invocation:
+  `rekeyAction` takes `createdNow` and returns `keep` when this invocation did not insert the
+  row, so a pre-existing row is never re-keyed or deleted.
 - **Alternatives**: Fetch first, insert after (today; rejected: a killed request loses the save
   and breaks FR-001); drop redirect-based dedup (rejected: breaks the short-link edge case).
 
 ## R8. Test approach (principle III)
 
 - **Decision**: Put the new decision logic in pure functions in `worker/src/lib.ts`
-  (`extractText`, `normalizeTags`, `parseExtraction`, `classifyRead`, reply formatting) and unit
+  (`extractText`, `normalizeTags`, `parseExtraction`, `classifyRead`, reply formatting, plus the
+  decisions `checkSender`, `linkState`, `rekeyAction`, `isEnriched`, `fillEmpty`) and unit
   test them in `worker/test/lib.test.ts`. The fetch and model calls stay thin in `index.ts` and
   are exercised by the quickstart.
 - **Rationale**: Matches the existing split and the constitution's "a parser, a branch that

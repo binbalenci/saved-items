@@ -16,7 +16,7 @@
 - Q: If I share a link I already saved, should the bot try reading the page again when the earlier attempt failed or only partly worked? → A: Yes. A link that was fully read is shown from what is saved and not read again; a link that was not fully read is read again now, filling in only what is missing.
 - Q: When one message contains several links, should the bot read all of them right away or only the first few? → A: Read all of them, with no cap (30 links should work), in a queue, with limited retries. **Moved to feature 002** (see below).
 - Q: How should I be able to tell the bot is still working, or that nothing has stalled, when I share many links? → A: An immediate "Saved N links, reading them now" reply and a final summary. **Moved to feature 002** (see below).
-- Scope decision (after clarify): the queue, unlimited links, retries, the acknowledgement and summary messages, and keeping the daily fill-in off links still being read are split into a later feature 002 (bulk sharing), which fits with the backlog import. This feature keeps today's handling of several links: up to 10 per message, read one after another.
+- Scope decision (after clarify): the queue, unlimited links, retries, the acknowledgement and summary messages, and keeping the daily fill-in off links still being read are split into a later feature 002 (bulk sharing), which fits with the backlog import. This feature keeps today's handling of several links: up to 10 per message, each handled independently.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -109,9 +109,9 @@ link now has whatever the fill-in could find.
 
 ### Edge Cases
 
-- A message contains several links: as today, up to 10 are saved and read one after another,
-  and links past the 10th are ignored. The bot sends one reply with one line per link, naming
-  it, and one link failing does not stop the others.
+- A message contains several links: as today, up to 10 are saved and read, and links past the
+  10th are ignored. Each link is handled independently: one failing or being slow does not stop
+  or delay the others. The bot sends one reply with one block per link, naming it.
 - I share a link I already saved: no duplicate entry is created and my earlier note is kept. If
   I add a new note, it is added after the earlier one, unless the earlier note already contains
   it (as today). If the link was fully read before, the reply shows what is saved and the page is
@@ -165,8 +165,9 @@ link now has whatever the fill-in could find.
   note unless the earlier note already contains it, as today. If the entry was fully read before,
   the system MUST reply from what is saved without reading the page again. If it was not, the
   system MUST read the page again and fill in only the details that are still empty.
-- **FR-013**: For a message with several links, the system MUST handle up to 10 links, one after
-  another and each independently, and MUST send one reply with one line per link, naming it.
+- **FR-013**: For a message with several links, the system MUST handle up to 10 links, each
+  independently (one failing or being slow MUST NOT stop or delay the others), and MUST send one
+  reply with one block per link, naming it, in the order the links appear in the message.
 - **FR-014**: The daily fill-in MUST skip entries already marked as filled in, and for the
   remaining entries MUST fill only the details that are still empty, never overwriting an
   existing title, snippet, tags or note.
@@ -181,7 +182,7 @@ link now has whatever the fill-in could find.
 - **Saved link**: one entry per link I share. Holds the link, my own note, a title, a short
   snippet, up to three tags, and whether details have been filled in. Created when I share a
   link; filled in either at save time or later by the daily fill-in.
-- **Reply**: the message the bot sends back for one message I share. It has one line per link,
+- **Reply**: the message the bot sends back for one message I share. It has one block per link,
   saying either what the page is (title, snippet, tags), what is missing, or that it could not
   be read.
 
@@ -194,7 +195,7 @@ link now has whatever the fill-in could find.
 - **SC-002**: 100% of shared links (up to 10 per message) end up saved, whether or not the page
   could be read.
 - **SC-003**: When I share 10 links in one message, all 10 are saved and the reply has exactly
-  one line per link, each naming its link, with none lost, duplicated or mixed up.
+  one block per link, each naming its link, with none lost, duplicated or mixed up.
 - **SC-004**: 100% of replies for unreadable links say plainly that the page could not be read,
   and 0% of them contain a made-up snippet or tags.
 - **SC-005**: After the daily fill-in runs, 0 entries that were read at save time have a changed
@@ -215,7 +216,7 @@ link now has whatever the fill-in could find.
   it as a dead link stays with the daily fill-in, as today.
 - Tags use the same English, lowercase style and the existing tag list the daily fill-in uses.
 - Speed is not a target: a single link normally gets its reply within seconds, and a message
-  with several links takes longer because they are read one after another.
+  with several links takes about as long as its slowest page.
 - A failed read is not retried at save time; the daily fill-in is the retry.
 - The existing owner-only rule is unchanged: the bot answers only me.
 - Out of scope: importing old saves, changing the Saved Items page, changing the Friday digest,

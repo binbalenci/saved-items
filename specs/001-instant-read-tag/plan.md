@@ -58,7 +58,7 @@ neuron allowance (an estimate, see `research.md` R3)
 |---|---|---|
 | I. D1 is the single source of truth | Pass | Only existing `items` columns; no second store; `items_fts` untouched. The Worker deletes at most the row it created seconds earlier in the same invocation when a redirect reveals a duplicate (`research.md` R7) |
 | II. Owner-only access | Pass | The secret-header check and the allow-list check run before anything is saved or read. The background work in `waitUntil()` is started only from `handleMessage` after both, with no new endpoint and no new secret (the AI binding is configuration, not a secret) |
-| III. Verified before commit to main | **Blocked until one task is done** | The gate says `npm test` MUST pass, and on Node 22.15 it fails today (`ERR_UNKNOWN_FILE_EXTENSION`). `worker/package.json` needs `--experimental-strip-types` in the `test` script (11 of 11 pass with it). That change is task 1. After it: new decision logic in pure functions with unit tests (`research.md` R8), and `npm test` plus `npx tsc --noEmit` before committing |
+| III. Verified before commit to main | **Blocked until one task is done** | The gate says `npm test` MUST pass, and on Node 22.15 it fails today (`ERR_UNKNOWN_FILE_EXTENSION`). `worker/package.json` needs `--experimental-strip-types` in the `test` script (11 of 11 pass with it). That change is task 1. After it: new decision logic in pure functions with unit tests (`research.md` R8), including the sender, link-state, re-key, enriched and fill-empty decisions, and `npm test` plus `npx tsc --noEmit` before committing |
 | IV. The page is built from source | Not affected | `page/` is unchanged; data shape is unchanged, so `ARTIFACT_NOTES.md` stays as is |
 | V. Free tier and simplicity first | Pass | New service named and justified: **Workers AI binding**. Why: it is free up to 10,000 neurons per day (about 300 links), needs no API key, runs on the platform the Worker already uses, and covers Vietnamese. Free options that are not enough: the page's own description gives no tags. **No new runtime dependency** in any `package.json`. Browser Run and Firecrawl are deliberately not added to the Worker (`research.md` R4, R3). The CPU limit is handled by caps, not by paying: Workers Paid would fix an overrun but is the owner's cost decision and is not assumed (`research.md` R9) |
 | VI. Untrusted web content | Pass | Model has no tools; page text is delimited as untrusted data; only `snippet` and `tags` are accepted back, validated; login walls skip the model and keep only note, title, URL; no login bypass (`contracts/model-extraction.md`) |
@@ -96,8 +96,9 @@ worker/
 │   │                        #   waitUntil(read in parallel, update, send reply); Env gains AI;
 │   │                        #   fetch reads a capped body, not just <head>
 │   └── lib.ts               # + extractText, normalizeTags, parseExtraction, classifyRead,
-│                            #   byte-budget helper, reply-line formatting; snippet cut
-│                            #   lowered from 600 to 400
+│                            #   byte-budget helper, formatBlock; decision functions
+│                            #   checkSender, linkState, rekeyAction, isEnriched, fillEmpty;
+│                            #   snippet cut lowered from 600 to 400
 └── test/
     └── lib.test.ts          # + tests for the new pure functions
 
@@ -117,7 +118,7 @@ by roughly 120 lines, which is the cost of not adding a module for one feature.
 |---|---|
 | FR-001, FR-011, FR-013 | request path: lookup and insert rows, return 200; `waitUntil` path: parallel read with byte cap, per-link and 25 s overall limits, one reply with a block per link |
 | FR-002–FR-006, FR-016 | model request/response in `contracts/model-extraction.md`; `normalizeTags`, `parseExtraction`, `classifyRead`; existing-tag query once per message |
-| FR-007, FR-012 | note only via `mergeNote`; lookup by key before fetch; `known` outcome; re-read of unfilled rows fills only empty fields |
+| FR-007, FR-012 | note only via `mergeNote`; lookup by key before fetch; `known` outcome; `linkState`, `rekeyAction` (never deletes a pre-existing row), `fillEmpty`, `isEnriched`; re-read of unfilled rows fills only empty fields |
 | FR-008–FR-010 | login-wall and unreadable classification; model sees only page text; validated output |
 | FR-014 | `docs/daily-task.md` step 1 statement plus the scheduled task prompt |
 | FR-015 | existing allow-list check, unchanged |

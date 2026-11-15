@@ -6,9 +6,10 @@
 `contracts/model-extraction.md`, `quickstart.md`
 
 **Tests**: Included. The spec does not ask for them, but constitution principle III does: new
-non-trivial logic (a parser, a branch that decides what to save) MUST come with a unit test in
-`worker/test/`. Tests cover the pure functions in `worker/src/lib.ts`; the fetch, model and
-Telegram calls are checked by `quickstart.md`. Write each test task first and watch it fail.
+non-trivial logic (a parser, a branch that decides what to save, anything touching the allow-list)
+MUST come with a unit test in `worker/test/`. Tests cover the pure functions in
+`worker/src/lib.ts`; the fetch, model and Telegram calls are checked by `quickstart.md`. Write
+each test task first and watch it fail.
 
 **Organization**: Grouped by user story. All paths are relative to the repository root.
 
@@ -28,6 +29,8 @@ Telegram calls are checked by `quickstart.md`. Write each test task first and wa
   `MODEL_TIMEOUT_MS`, `DEADLINE_MS`, `MAX_LINKS`, `PAGE_TEXT_CHARS`, `MODEL_MAX_TOKENS`,
   `EXISTING_TAGS_LIMIT`.
 - All page and model text put into a Telegram reply goes through `escapeHtml` (principle VI).
+- Logging (principle II): log `err.name` and `err.message` only, never an error object, a request
+  or a URL, because a Telegram call's URL contains the bot token.
 
 ---
 
@@ -47,10 +50,10 @@ Telegram calls are checked by `quickstart.md`. Write each test task first and wa
 
 ## Phase 2: Foundational (blocks all user stories)
 
-**Purpose**: the request path (save first, return 200) and the background shell that every story
-plugs into. No user-visible reading yet.
+**Purpose**: the decision functions, the request path (save first, return 200) and the background
+shell that every story plugs into. No user-visible reading yet.
 
-**⚠️ CRITICAL**: no story work starts until T004–T008 are done.
+**⚠️ CRITICAL**: no story work starts until T004–T010 are done.
 
 - [ ] T004 In `worker/src/index.ts` add `AI: Ai;` to `Env` (comment: Workers AI binding, no
   secret) and a constants block at the top: `MODEL = '@cf/zai-org/glm-4.7-flash'`,
@@ -63,25 +66,60 @@ plugs into. No user-visible reading yet.
 - [ ] T006 In `worker/src/lib.ts` export `pageByteBudget(linkCount: number): number` returning
   `Math.min(65536, Math.floor(327680 / Math.max(1, linkCount)))` (research R9: `min(64 KB, 320 KB ÷
   links)`). T005 MUST now pass.
-- [ ] T007 In `worker/src/index.ts` build the request path. Change `fetch(req, env)` to
+- [ ] T007 In `worker/test/lib.test.ts` add failing tests for the five decision functions
+  (`data-model.md`, "Decision functions"):
+  - `checkSender(allowedId, fromId)`: no `fromId` → `'none'`; `allowedId` undefined or blank →
+    `'unconfigured'`; `fromId` differs → `'stranger'`; `fromId` equals `allowedId` with
+    surrounding whitespace trimmed → `'allowed'`.
+  - `linkState(existing)`: `null` → `'new'`; a row with `enriched_at` set → `'known'`; a row with
+    `enriched_at` null → `'unfilled'`.
+  - `rekeyAction(currentKey, finalKey, otherRow, selfId, createdNow)`: `createdNow` false →
+    `'keep'` even when `finalKey` differs and `otherRow` exists (a pre-existing row is never
+    deleted or re-keyed); `createdNow` false with no `otherRow` → `'keep'`; `createdNow` true
+    and equal keys → `'keep'`; `createdNow` true and `otherRow` with a different id →
+    `'merge-and-delete'`; `createdNow` true and no `otherRow` → `'update-key'`.
+  - `isEnriched(row)`: true only when `text` is non-empty and `tags` parses to an array of at
+    least 1; false for empty `text`, `'[]'`, invalid JSON, or null fields.
+  - `fillEmpty(existing, found)`: `title`, `text` and `author` are in the result only when the
+    existing value is null or empty; `tags` only when the existing value is `'[]'`; `note` is
+    never in the result (FR-007, FR-014).
+- [ ] T008 In `worker/src/lib.ts` export `checkSender`, `linkState`, `rekeyAction`, `isEnriched`
+  and `fillEmpty` exactly as the table in `data-model.md` ("Decision functions") defines them.
+  T007 MUST now pass.
+- [ ] T009 In `worker/src/index.ts` build the request path. Change `fetch(req, env)` to
   `fetch(req, env, ctx)` and pass `ctx` to `handleMessage`. Keep the secret-header check, the
-  allow-list check, the `/find` and help commands and `extractLinks` exactly as they are. After
-  `extractLinks`, take the first `MAX_LINKS` urls (extra links are ignored, as today) and for each
-  one, in order: look up `SELECT id, title, text, tags, note, enriched_at FROM items WHERE url_norm
-  = ?` with `normalizeUrl(url)`. If found, merge the note with `mergeNote` and update only if the
-  merged note differs (as today); state is `known` when `enriched_at` is not null, else `unfilled`.
-  If not found, `INSERT` the row with `url`, `url_norm`, `platform` (`detectPlatform`), `note`
-  (null when empty), `saved_at`, `source = 'bot'`, `status = 'unknown'` and no fetch; state `new`.
-  All of this happens before the handler returns `ok` (FR-001). Then call
-  `ctx.waitUntil(processLinks(...))` and return. A message with no links keeps today's reply.
-- [ ] T008 In `worker/src/index.ts` add the background shell `processLinks(env, msg, links)`.
-  It runs one `readLink(env, link, context)` per link in parallel (`Promise.all`), keeps results in
-  message order, and races the whole thing against `DEADLINE_MS`: a link not finished by then is
-  treated as `unread` with reason `timeout`. Join the per-link blocks with a blank line and send
+  `/find` and help commands and `extractLinks` as they are. Replace the inline allow-list code
+  with `checkSender` and keep its behavior: `none` returns, `unconfigured` sends the existing
+  "Not set up yet" reply, `stranger` gets silence. After `extractLinks`, take the first
+  `MAX_LINKS` urls (extra links are ignored, as today). For each one, in order, inside its own
+  `try/catch`:
+  1. Look up `SELECT id, title, text, tags, note, enriched_at FROM items WHERE url_norm = ?` with
+     `normalizeUrl(url)`.
+  2. If found, merge the note with `mergeNote` and update only if the merged note differs (as
+     today), and set `noteAdded` when it did. State is `linkState(row)`, `createdNow` is false.
+  3. If not found, `INSERT … ON CONFLICT(url_norm) DO NOTHING` with `url`, `url_norm`,
+     `platform` (`detectPlatform`), `note` (null when empty), `saved_at`, `source = 'bot'`,
+     `status = 'unknown'` and no fetch. `createdNow` is true only if the insert changed a row
+     (`meta.changes === 1`). If it did not (a lost race), re-select by `url_norm` and treat it as
+     step 2.
+  4. On an error, log `err.name` and `err.message` only, give the link state `failed`, and
+     continue with the next link.
+
+  Each link becomes `{ url, id, state: 'new' | 'known' | 'unfilled' | 'failed', createdNow,
+  noteAdded }`. All of this happens before the handler returns `ok` (FR-001). Then call
+  `ctx.waitUntil(processLinks(...))` and return. Apply the same logging rule to the existing
+  `console.error('update failed', err)` in the handler. A message with no links keeps today's reply.
+- [ ] T010 In `worker/src/index.ts` add the background shell `processLinks(env, msg, links)`. Build
+  `context = { byteBudget, getExistingTags }`: `byteBudget` is `pageByteBudget(number of links)`
+  and `getExistingTags` is a memoized async function, so the tags query runs once per message and
+  only if some link reaches the model. Links in state `failed` are not read and get the
+  save-failed block. Every other link runs `readLink(env, link, context)`, in parallel
+  (`Promise.all`), results kept in message order, raced against `DEADLINE_MS`: a link not finished
+  by then is treated as `unread` with reason `timeout`. Join the blocks with a blank line and send
   them with `reply`, split by the existing `chunk()` helper (4000 characters). Wrap it in
-  `try/catch`: on an unexpected error `console.error` it and send a best-effort reply `Saved, but
-  reading failed. The daily fill-in will pick it up.` Add `readLink` as a temporary stub that
-  returns `{ outcome: 'unread', reason: 'error' }`; US1 replaces it.
+  `try/catch`: on an unexpected error log `err.name` and `err.message` only and send a
+  best-effort reply `Saved, but reading failed. The daily fill-in will pick it up.` Add `readLink`
+  as a temporary stub that returns `{ outcome: 'unread', reason: 'error' }`; T027 replaces it.
 
 **Checkpoint**: `npm test` and `npx tsc --noEmit` pass; sharing a link saves the row and replies
 with a placeholder "couldn't read" block.
@@ -99,53 +137,59 @@ reply shows title, snippet and tags; the D1 row has the same values, the note un
 
 ### Tests for User Story 1 (write first, they must fail)
 
-- [ ] T009 [US1] In `worker/test/lib.test.ts` add failing tests for `extractText(html, maxChars)`:
+- [ ] T011 [US1] In `worker/test/lib.test.ts` add failing tests for `extractText(html, maxChars)`:
   skips `script`, `style`, `noscript`, `svg` and comment blocks; strips tags; decodes entities
   (`&amp;`, `&#39;`, `&nbsp;`) in the collected text; collapses whitespace; stops at `maxChars`
   (6,000 in production) even on a much longer page; returns `''` for markup with no text.
-- [ ] T010 [US1] In `worker/test/lib.test.ts` add failing tests for `normalizeTags(raw, existing)`:
-  lowercases and trims; spaces become `-`; characters outside `a-z0-9-` are dropped; keeps only
-  2–30 character tags; removes duplicates; keeps the first 3; ignores non-strings; a tag equal to
-  an existing tag is returned unchanged (FR-006).
-- [ ] T011 [US1] In `worker/test/lib.test.ts` add failing tests for `parseExtraction(raw)`: plain
-  JSON; JSON inside prose or a code fence (first `{…}` object is used); not JSON, empty string,
-  `null`, an array → `{ snippet: null, tags: [] }`; extra keys ignored; a snippet over 400
+- [ ] T012 [US1] In `worker/test/lib.test.ts` add failing tests for `normalizeTags(raw, existing)`:
+  lowercases and trims; spaces become `-`; repeated `-` collapse and a leading or trailing `-` is
+  removed; only 2–30 character tags are kept; duplicates removed; the first 3 are kept;
+  non-strings ignored; a tag equal to an existing tag is returned unchanged (FR-006). A tag with
+  anything other than `a-z`, `0-9`, spaces and hyphens is rejected whole, not cleaned: `"học máy"`
+  is dropped, `"ai_tools"` is dropped, `"c++"` is dropped; `"AI  Tools"` becomes `"ai-tools"`;
+  `"web3"` stays; `"-x-"` becomes `"x"` and is dropped for being under 2 characters (FR-003).
+- [ ] T013 [US1] In `worker/test/lib.test.ts` add failing tests for `parseExtraction(raw)`: plain
+  JSON; JSON inside prose or a code fence (the first `{…}` object is used); not JSON, empty
+  string, `null`, an array → `{ snippet: null, tags: [] }`; extra keys ignored; a snippet over 400
   characters is cut at 397 and ends with `...`; an empty or whitespace snippet becomes `null`;
   tags go through `normalizeTags`; a non-string snippet becomes `null`.
-- [ ] T012 [US1] In `worker/test/lib.test.ts` add failing tests for `classifyRead` (full path): a
+- [ ] T014 [US1] In `worker/test/lib.test.ts` add failing tests for `classifyRead` (full path): a
   2xx HTML page with body text, a snippet and one valid tag → `outcome: 'full'`, `enriched: true`,
   `status: 'ok'`, title, snippet, tags and author carried through. Also: a model snippet beats the
   page description; with no model snippet but a page description, the description (cut to 400) is
   the snippet and a valid tag still gives `full`.
-- [ ] T013 [US1] In `worker/test/lib.test.ts` add failing tests for `formatBlock` full and known
+- [ ] T015 [US1] In `worker/test/lib.test.ts` add failing tests for `formatBlock` full and known
   blocks, matching `contracts/bot-replies.md` exactly: `✓ <b>Title</b>` line, snippet cut to 160
   characters ending with `…`, a tags line `#tag1 #tag2`, and `Already saved: <b>Title</b>` for a
-  known link (`Already saved, note added:` when a new note was added). HTML-special characters in
-  title, snippet and tags are escaped. Also extend the existing `parseMeta` test: a 500-character
-  description comes back at most 400 characters long, cut at 397 plus `...`.
+  known link (`Already saved, note added:` when a note was added). When the title is null the
+  title line is the escaped URL in every block kind. HTML-special characters in title, snippet,
+  tags and URL are escaped. Also extend the existing `parseMeta` test: a 500-character description
+  comes back at most 400 characters long, cut at 397 plus `...`.
 
 ### Implementation for User Story 1
 
-- [ ] T014 [US1] In `worker/src/lib.ts` change `parseMeta` so a description longer than 400
+- [ ] T016 [US1] In `worker/src/lib.ts` change `parseMeta` so a description longer than 400
   characters is cut to 397 characters plus `...` (it is 600 and 597 today; FR-004). Do not change
   the shape of its return value (`{ title, text, author }`); the existing deepEqual test depends
   on it.
-- [ ] T015 [US1] In `worker/src/lib.ts` export `extractText(html: string, maxChars: number):
+- [ ] T017 [US1] In `worker/src/lib.ts` export `extractText(html: string, maxChars: number):
   string`. One linear pass, no DOM, no whole-document regex. Skip `script`, `style`, `noscript`,
   `svg` and comment blocks using `indexOf`; strip tags; collapse whitespace; stop as soon as
   `maxChars` characters of text are collected; decode entities only on the collected text, using
-  the existing `decodeEntities`. T009 MUST pass.
-- [ ] T016 [US1] In `worker/src/lib.ts` export `normalizeTags(raw: unknown, existing: string[]):
-  string[]`. Tag rule, quoted from `data-model.md`: "after lowercasing and trimming, spaces become
-  `-`, characters outside `a-z0-9-` are dropped, 2–30 characters. Duplicates removed, first 3
-  kept. A tag equal to an existing tag is used as-is." T010 MUST pass.
-- [ ] T017 [US1] In `worker/src/lib.ts` export `parseExtraction(raw: unknown): { snippet: string
+  the existing `decodeEntities`. T011 MUST pass.
+- [ ] T018 [US1] In `worker/src/lib.ts` export `normalizeTags(raw: unknown, existing: string[]):
+  string[]`. Tag rule, quoted from `data-model.md`: "lowercase and trim. Reject the whole tag,
+  rather than cleaning it, if it contains anything other than `a-z`, `0-9`, spaces and hyphens
+  (so "học máy" and "c++" are dropped). Then spaces become `-`, repeated `-` collapse, a leading
+  or trailing `-` is removed, and the length must be 2–30. Duplicates removed, first 3 kept. A tag
+  equal to an existing tag is used as-is (FR-006)." T012 MUST pass.
+- [ ] T019 [US1] In `worker/src/lib.ts` export `parseExtraction(raw: unknown): { snippet: string
   | null; tags: string[] }` per `contracts/model-extraction.md`: find the first `{…}` object in
   the text and `JSON.parse` it inside `try/catch`; take only `snippet` (string) and `tags` (array
   of strings); snippet rule, quoted from `data-model.md`: "string, trimmed, 1–400 characters,
   original language. Over-long text is cut at 397 and ends with `...`"; an empty snippet becomes
-  `null`; tags via `normalizeTags` with an empty existing list. T011 MUST pass.
-- [ ] T018 [US1] In `worker/src/lib.ts` export `classifyRead(input)` with `input: { fetchFailure:
+  `null`; tags via `normalizeTags` with an empty existing list. T013 MUST pass.
+- [ ] T020 [US1] In `worker/src/lib.ts` export `classifyRead(input)` with `input: { fetchFailure:
   'timeout' | 'error' | null; status: number; contentType: string; loginWall: boolean; meta: {
   title, text, author }; bodyText: string; extraction: { snippet: string | null; tags: string[] }
   | null }` and result `{ outcome: 'full' | 'partial' | 'unread'; reason?: 'login' | 'gone' |
@@ -154,44 +198,57 @@ reply shows title, snippet and tags; the D1 row has the same values, the note un
   `extraction.snippet`, else `meta.text` (cut to 400); tags are `extraction.tags`; when both a
   snippet and at least one tag exist, return `full` with `enriched: true` and `status: 'ok'`.
   Every other input returns `{ outcome: 'unread', reason: 'error', enriched: false, status:
-  'unknown' }` for now (US2 replaces that). T012 MUST pass.
-- [ ] T019 [US1] In `worker/src/lib.ts` export `formatBlock(kind, data)` producing the full and
-  known blocks exactly as written in `contracts/bot-replies.md` (use `escapeHtml` on every piece
-  of text; snippet cut to 160 characters ending with `…` in the reply only). T013 MUST pass.
-- [ ] T020 [US1] In `worker/src/index.ts` replace `fetchMeta` with `fetchPage(url,
-  byteBudget)`: one `fetch` with `redirect: 'follow'`, the existing user agent and
-  `AbortSignal.timeout(FETCH_TIMEOUT_MS)`. Read the body as a stream and cancel at `byteBudget`
-  bytes. Return `{ finalUrl, status, contentType, html }`, or `{ fetchFailure: 'timeout' }` on an
-  abort and `{ fetchFailure: 'error' }` on any other throw (including a subrequest-limit error).
-  Run `parseMeta` on the head part only (up to `</head>`, else the whole capped text) and
-  `extractText(html, PAGE_TEXT_CHARS)` for the body text.
-- [ ] T021 [US1] In `worker/src/index.ts` add `loadExistingTags(env)`: run `SELECT value AS tag,
+  'unknown' }` for now (US2 replaces that). T014 MUST pass.
+- [ ] T021 [US1] In `worker/src/lib.ts` export `formatBlock(kind, data)` producing the full and
+  known blocks exactly as written in `contracts/bot-replies.md` (`escapeHtml` on every piece of
+  text; snippet cut to 160 characters ending with `…` in the reply only; `data` includes `url`,
+  which replaces the title when the title is null). T015 MUST pass.
+- [ ] T022 [US1] In `worker/src/index.ts` replace `fetchMeta` with `fetchPage(url, byteBudget)`:
+  one `fetch` with `redirect: 'follow'`, the existing user agent and
+  `AbortSignal.timeout(FETCH_TIMEOUT_MS)`. Keep the user agent string and put this comment above
+  the headers: `// Looks like a link-preview crawler on purpose: public pages then serve their
+  Open Graph tags. It does not log in or bypass a login (principle VI).` Read the body as a stream
+  and cancel at `byteBudget` bytes. Return `{ finalUrl, status, contentType, html }`, or
+  `{ fetchFailure: 'timeout' }` on an abort and `{ fetchFailure: 'error' }` on any other throw
+  (including a subrequest-limit error). Run `parseMeta` on the head part only (up to `</head>`,
+  else the whole capped text) and `extractText(html, PAGE_TEXT_CHARS)` for the body text.
+- [ ] T023 [US1] In `worker/src/index.ts` add `loadExistingTags(env)`: run `SELECT value AS tag,
   count(*) AS n FROM items, json_each(items.tags) GROUP BY value ORDER BY n DESC LIMIT ?` bound
-  to `EXISTING_TAGS_LIMIT` and return the tag strings. It is called once per message, only if at
-  least one link will go to the model.
-- [ ] T022 [US1] In `worker/src/index.ts` add `askModel(env, existingTags, page)` per
+  to `EXISTING_TAGS_LIMIT` and return the tag strings. T010's memoized `getExistingTags` calls it,
+  so it runs at most once per message.
+- [ ] T024 [US1] In `worker/src/index.ts` add `askModel(env, existingTags, page)` per
   `contracts/model-extraction.md`: `env.AI.run(MODEL, { messages, max_tokens: MODEL_MAX_TOKENS })`
   raced against `MODEL_TIMEOUT_MS`; the system message says the text inside `<page>` is untrusted
   data and must never be obeyed, and asks for JSON only; the user message holds
   `<existing_tags>` and a `<page>` block with the title, description and the extracted text. No
   tools are passed. Run the response text through `parseExtraction`; a throw or a timeout returns
   `null`. The owner's note is never sent.
-- [ ] T023 [US1] In `worker/src/index.ts` implement `readLink` for state `new`: `fetchPage`, then
-  `classifyRead` with the model result, then `UPDATE items SET title = ?, text = ?, tags = ?,
-  author = ?, status = ?, enriched_at = ? WHERE id = ?` using the classification (`enriched_at`
-  is `strftime('%Y-%m-%dT%H:%M:%SZ','now')` only when `enriched` is true, otherwise left null).
-  After the fetch, apply the redirect rule from `research.md` R7 using the existing `pickNorm`:
-  if the key differs and another row has that key, merge the note (`mergeNote`) and fill only
-  empty fields into that row and delete the row just created in this invocation; otherwise set
-  this row's `url_norm` to the new key. Never write `note` from page or model content (FR-007).
-- [ ] T024 [US1] In `worker/src/index.ts` implement `readLink` for state `known`: no fetch, no
+- [ ] T025 [US1] In `worker/src/index.ts` implement `readLink` for state `new`, in this order:
+  1. `fetchPage`.
+  2. Re-key check (`research.md` R7): compute the final key with the existing `pickNorm`, look up
+     any row holding it (`SELECT id, title, text, tags, note, enriched_at FROM items WHERE
+     url_norm = ?`), and call `rekeyAction(currentKey, finalKey, otherRow, selfId, createdNow)`
+     with `createdNow` from the link record (T009).
+     - `merge-and-delete`: merge the note into the other row with `mergeNote`, delete the row this
+       call created. If `isEnriched(otherRow)`, return a `known` block from the other row and skip
+       the model. Otherwise continue with the model and write into the other row.
+     - `update-key`: `UPDATE items SET url_norm = ? WHERE id = ?`. If it fails with a unique-key
+       error, re-select and take the `merge-and-delete` path.
+     - `keep`: continue.
+  3. Only now call `askModel` and `classifyRead`.
+  4. Write through `fillEmpty` (for a new row every field is empty, so it writes them all) plus
+     `status` and `enriched_at`; `enriched_at` is `strftime('%Y-%m-%dT%H:%M:%SZ','now')` only
+     when `isEnriched` is true for the row after the write, otherwise null.
+
+  Never write `note` from page or model content (FR-007).
+- [ ] T026 [US1] In `worker/src/index.ts` implement `readLink` for state `known`: no fetch, no
   model call; return a `known` block built from the saved `title`, `text` and `tags` (parse the
-  JSON array), with `Already saved, note added:` when the message carried a new note that
-  `mergeNote` actually added.
-- [ ] T025 [US1] In `worker/src/index.ts` wire `processLinks`: compute `pageByteBudget` from the
-  number of links, call `loadExistingTags` once if any link is `new` or `unfilled`, run the links
-  in parallel, and replace the temporary stub. Remove the stub.
-- [ ] T026 [US1] Run `npm test` and `npx tsc --noEmit` in `worker/`; both MUST pass.
+  JSON array; invalid JSON gives no tags), using `Already saved, note added:` when the link
+  record's `noteAdded` is true.
+- [ ] T027 [US1] In `worker/src/index.ts` finish `processLinks`: replace the temporary stub from
+  T010 with the real `readLink` dispatch (`new`, `known`; `unfilled` arrives in T036). Remove the
+  stub.
+- [ ] T028 [US1] Run `npm test` and `npx tsc --noEmit` in `worker/`; both MUST pass.
 
 **Checkpoint**: User Story 1 works end to end. Stop and validate before moving on.
 
@@ -205,15 +262,16 @@ reported honestly and left for the daily fill-in, with no invented snippet or ta
 **Independent Test**: share a login-walled post and a 404 URL (`quickstart.md` section 3, rows 5–9).
 Both rows exist with the note, and the replies say they could not be read.
 
-**Depends on**: US1 (extends `classifyRead`, `formatBlock` and `readLink`).
+**Depends on**: US1 (extends `classifyRead`, `formatBlock` and `readLink`; `fillEmpty` and
+`isEnriched` already exist from Foundational).
 
 ### Tests for User Story 2 (write first, they must fail)
 
-- [ ] T027 [US2] In `worker/test/lib.test.ts` add failing tests for `isLoginWall(finalUrl,
+- [ ] T029 [US2] In `worker/test/lib.test.ts` add failing tests for `isLoginWall(finalUrl,
   html)`: true when the final URL matches `/login|signin|accounts\//i`; true when the page title
   or `og:title` is a generic login title (the existing `GENERIC` pattern, e.g. `Log in to
   Facebook`, `Instagram`); false for an ordinary page.
-- [ ] T028 [US2] In `worker/test/lib.test.ts` add failing tests for the rest of `classifyRead`,
+- [ ] T030 [US2] In `worker/test/lib.test.ts` add failing tests for the rest of `classifyRead`,
   in this rule order: `fetchFailure` set → `unread` with that reason (`timeout` or `error`);
   `loginWall` true → `unread/login`; status 404 or 410 → `unread/gone`; any other non-2xx status →
   `unread/error`; content type without `html` → `unread/unsupported`; fewer than 200 characters of
@@ -221,44 +279,52 @@ Both rows exist with the note, and the replies say they could not be read.
   (`extraction: null`) with a page title or description → `partial`, `enriched: false`, snippet
   from the description if any, tags `[]`; valid snippet but no valid tag → `partial`; valid tag
   but no snippet and no description → `partial`; nothing found at all → `unread/error`. An
-  `unread` result never carries a snippet or tags, and a login wall never carries a snippet.
-- [ ] T029 [US2] In `worker/test/lib.test.ts` add failing tests for `formatBlock` partial and
-  unread blocks matching `contracts/bot-replies.md`: `◐ <b>Title</b>` with the snippet and
-  `Couldn't make tags, the daily fill-in will add them.`; `⚠ Saved, but I couldn't read it
-  (<reason>). Your note is kept; the daily fill-in will try.` followed by the URL when there is no
-  title. Reason wording: `login` → `login wall`, `gone` → `the page is gone`, `error` → `the site
+  `unread` result may carry a `title` (when found, never a generic login title) but never a
+  snippet or tags, and a login wall never carries a snippet.
+- [ ] T031 [US2] In `worker/test/lib.test.ts` add failing tests for `formatBlock` partial, unread
+  and save-failed blocks matching `contracts/bot-replies.md`. Partial: `◐ <b>Title</b>`, the
+  snippet if any, and `Couldn't get <list>; the daily fill-in will add what's missing.` with one
+  test per row of the contract's table (tags; a snippet; a snippet and tags; a title; a title and
+  tags; a title and a snippet). Unread: `⚠ Saved, but I couldn't read it (<reason>). Your note is
+  kept; the daily fill-in will try.` with the title on the second line when known, else the URL.
+  Reason wording: `login` → `login wall`, `gone` → `the page is gone`, `error` → `the site
   returned an error`, `timeout` → `it took too long`, `empty` → `there was too little text`,
-  `unsupported` → `it isn't a web page I can read`.
-- [ ] T030 [US2] In `worker/test/lib.test.ts` add failing tests for `fillEmpty(existing, found)`:
-  returns only the fields to write. `title`, `text` and `author` are written only when the
-  existing value is null or empty; `tags` is written only when the existing value is `[]` (`'[]'`);
-  `note` is never in the result (FR-014, FR-007).
+  `unsupported` → `it isn't a web page I can read`. Save failed: `⚠ I couldn't save this one,
+  please send it again.` followed by the URL.
 
 ### Implementation for User Story 2
 
-- [ ] T031 [US2] In `worker/src/lib.ts` export `isLoginWall(finalUrl: string, html: string):
-  boolean` as described in T027. Reuse the `GENERIC` pattern; do not change `parseMeta`'s return
-  shape. T027 MUST pass.
-- [ ] T032 [US2] In `worker/src/lib.ts` replace the placeholder branch of `classifyRead` with the
-  full rule list from T028, in that order, using the constants "fewer than 200 characters of
-  extracted text" and "page description of at least 80 characters". Unread results set
-  `enriched: false`, `status: 'unknown'`, and no snippet or tags. T028 MUST pass.
-- [ ] T033 [US2] In `worker/src/lib.ts` extend `formatBlock` with the partial and unread blocks
-  and the reason wording from T029. T029 MUST pass.
-- [ ] T034 [US2] In `worker/src/lib.ts` export `fillEmpty(existing, found)` as described in T030.
-  T030 MUST pass.
+- [ ] T032 [US2] In `worker/src/lib.ts` export `isLoginWall(finalUrl: string, html: string):
+  boolean` as described in T029. Reuse the `GENERIC` pattern; do not change `parseMeta`'s return
+  shape. T029 MUST pass.
+- [ ] T033 [US2] In `worker/src/lib.ts` replace the placeholder branch of `classifyRead` with the
+  full rule list from T030, in that order, using the constants "fewer than 200 characters of
+  extracted text" and "page description of at least 80 characters". Unread results carry `title`
+  (when found and not a generic login title), `snippet: null`, `tags: []`, `enriched: false` and
+  `status: 'unknown'`. T030 MUST pass.
+- [ ] T034 [US2] In `worker/src/lib.ts` extend `formatBlock` with the partial, unread and
+  save-failed blocks and the reason wording from T031. T031 MUST pass.
 - [ ] T035 [US2] In `worker/src/index.ts` make `readLink` use `isLoginWall` and the full
-  `classifyRead`: for a login wall or any `unread` result skip the model call entirely and write
-  nothing new (no snippet, no tags; keep only the note, the title if any, and the URL). For a
-  `partial` result write the fields found and leave `enriched_at` null.
+  `classifyRead`. For a login wall or any `unread` result skip the model entirely and write only
+  `title`, through `fillEmpty`, so it is written only when the row has none; never write a
+  snippet or tags, and leave `status` unchanged. For a `partial` result write the fields found
+  through `fillEmpty` and leave `enriched_at` null.
 - [ ] T036 [US2] In `worker/src/index.ts` implement `readLink` for state `unfilled` (a link saved
-  before but not fully read): read it again exactly like a new link, then write only what
-  `fillEmpty` returns; set `enriched_at` only when, after the write, the row has both a snippet
-  and at least one tag. The note is already merged by the request path (T007).
-- [ ] T037 [US2] In `worker/src/index.ts` confirm the three time bounds map to the reply: a fetch
-  abort gives `unread/timeout`, a model timeout or error gives `partial` (or `unread/error` when
-  the page gave nothing), and a link unfinished at `DEADLINE_MS` gives `unread/timeout` in the
-  reply while its row stays saved (FR-011). Fix any gap you find.
+  before but not fully read): read it again like a new link (T025 steps 1–4). `createdNow` is false
+  for these rows, so `rekeyAction` returns `keep` and the row is never re-keyed or deleted. Write
+  only what `fillEmpty` returns; set `enriched_at` only when `isEnriched` is true for the row
+  after the write. The note is already merged by the request path (T009). Add `unfilled` to the
+  `readLink` dispatch in `processLinks`.
+- [ ] T037 [US2] In `worker/src/index.ts` verify the four failure paths and fix any that do not
+  behave as stated:
+  1. A fetch abort calls `classifyRead` with `fetchFailure: 'timeout'`.
+  2. A model throw or timeout makes `askModel` return `null`, which gives `partial` (or
+     `unread/error` when the page gave nothing).
+  3. At `DEADLINE_MS` unfinished links get the `unread/timeout` block and their rows stay saved.
+  4. A registration error gives the save-failed block and the other links are still saved.
+
+  Paths 1, 2 and 4 are covered by the unit tests plus `quickstart.md`; path 3 by the quickstart
+  row "all slow pages".
 - [ ] T038 [US2] Run `npm test` and `npx tsc --noEmit` in `worker/`; both MUST pass.
 
 **Checkpoint**: User Stories 1 and 2 both work. The bot never loses a save and never invents
@@ -280,12 +346,13 @@ partial row gets only its missing tags; no `note` or `starred` changes.
   coalesce(nullif(text,''), ?), author = coalesce(nullif(author,''), ?), tags = CASE WHEN tags =
   '[]' THEN ? ELSE tags END, status = ?, enriched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE
   id = ?`. Keep the existing sentence that params are strings and null is the JSON null.
-- [ ] T040 [P] [US3] In `docs/daily-task.md` step 1 add the rules that go with it: the work query
-  keeps `WHERE enriched_at IS NULL` (the Worker sets `enriched_at` only when a snippet and a tag
-  were produced, so fully read links are skipped); for a row that already has a title or snippet,
-  fill only what is empty and never rewrite it; tags are written only when the row has none; never
-  change `note` or `starred`. Update the "Rules" section sentence to match. Keep the rest of the
-  file as it is.
+- [ ] T040 [P] [US3] In `docs/daily-task.md` step 1: change the work query's select list to
+  `SELECT id, url, platform, title, text, author, note, tags, saved_at …` (it keeps `WHERE
+  enriched_at IS NULL`, because the Worker sets `enriched_at` only when a snippet and a tag were
+  produced, so fully read links are skipped). Add the rules that go with it: for a row that
+  already has a title or snippet, fill only what is empty and never rewrite it; tags are written
+  only when the row has none; never change `note` or `starred`. Update the "Rules" section
+  sentence to match. Keep the rest of the file as it is.
 - [ ] T041 [US3] **MANUAL** Update the Claude scheduled task `trig_016Zxgq1auqXzryXSsAxUGSY`
   ("🔖 Saved items: daily fill-in + Friday digest") so its prompt equals the new
   `docs/daily-task.md` (`CLAUDE.md`: they change together). Tick this only after the owner has
@@ -320,10 +387,11 @@ partial row gets only its missing tags; no `note` or `starred` changes.
 ### Phase dependencies
 
 - **Phase 1 (Setup)**: none. T001 and T002 in parallel, then T003.
-- **Phase 2 (Foundational)**: after Phase 1. T004 → T005/T006 → T007 → T008 (T007 and T008 edit
-  `index.ts`, T005/T006 edit other files, so T005–T006 can run alongside T004).
-- **US1 (Phase 3)**: after Phase 2. Tests T009–T013 first, then `lib.ts` tasks T014–T019 in
-  order, then `index.ts` tasks T020–T025 in order, then T026.
+- **Phase 2 (Foundational)**: after Phase 1. T004; T005 → T006; T007 → T008; then T009 → T010.
+  T005–T008 edit other files than T004, so they can run alongside it. T009 needs T008 (it calls
+  `checkSender`, `linkState`).
+- **US1 (Phase 3)**: after Phase 2. Tests T011–T015 first, then `lib.ts` tasks T016–T021 in
+  order, then `index.ts` tasks T022–T027 in order, then T028.
 - **US2 (Phase 4)**: after US1 (it edits the same functions).
 - **US3 (Phase 5)**: independent. T039, T040 and T042 can start any time after Phase 1.
 - **Polish (Phase 6)**: after the stories you want in this release. T045 and T046 need a deployed
@@ -337,7 +405,7 @@ partial row gets only its missing tags; no `note` or `starred` changes.
 
 ### Parallel opportunities
 
-- T001 ∥ T002; T005/T006 ∥ T004.
+- T001 ∥ T002; T005–T008 ∥ T004.
 - US3 (T039, T040, T042) ∥ everything in `worker/`.
 - Within a phase the test tasks all edit `worker/test/lib.test.ts`, so write them one after another
   or in one sitting; they are not marked [P].
@@ -348,7 +416,7 @@ partial row gets only its missing tags; no `note` or `starred` changes.
 # After Phase 1, in parallel:
 Task: "T039 [US3] docs/daily-task.md write-back statement"
 Task: "T042 [US3] README.md Workers AI note"
-Task: "T004 index.ts constants and Env"   # then T005/T006 lib.ts helper
+Task: "T004 index.ts constants and Env"   # then T005–T008 lib.ts helpers and decision functions
 ```
 
 ---
@@ -364,7 +432,7 @@ Task: "T004 index.ts constants and Env"   # then T005/T006 lib.ts helper
 
 ### Incremental delivery
 
-1. Setup + Foundational → request path and shell in place.
+1. Setup + Foundational → decision functions, request path and shell in place.
 2. US1 → test with a public article.
 3. US2 → test with a login wall and a 404.
 4. US3 → test the daily fill-in by hand.
@@ -374,13 +442,18 @@ Task: "T004 index.ts constants and Env"   # then T005/T006 lib.ts helper
 
 ## Notes and decisions the plan did not pin down
 
-- **Thin pages**: `plan.md` says "too little text" without a number. T028/T032 use: fewer than 200
+- **Thin pages**: `plan.md` says "too little text" without a number. T030/T033 use: fewer than 200
   characters of extracted text and no page description of at least 80 characters. Change the
   number there if you disagree.
 - **Removed posts**: `data-model.md` says `gone` covers "404/410 or a removed-post page". These
   tasks detect only the status codes. A removed post served with a normal 200 page is not
   recognized here; marking it dead stays with the daily fill-in, as in the spec's assumptions.
-- **Stub in T008**: the temporary `readLink` stub is removed in T025; do not commit between them
+- **Unread titles**: an unread link writes a title it found only when the row has none, never a
+  snippet or tags (decision recorded in `data-model.md` and `contracts/bot-replies.md`).
+- **Pre-existing rows are never deleted**: `rekeyAction` takes `createdNow` and returns `keep`
+  when this invocation did not insert the row. As a result, a re-shared unfilled link whose
+  redirect lands on a different existing entry is read and filled but not merged with it.
+- **Stub in T010**: the temporary `readLink` stub is removed in T027; do not commit between them
   unless you accept that the bot replies "couldn't read" to everything.
 - Commit after each task or logical group, to `main`, only when `npm test` and `npx tsc --noEmit`
   pass (principle III).
