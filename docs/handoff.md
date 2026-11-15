@@ -44,6 +44,16 @@ Benjamin is a senior engineer using Spec Kit for the first time. He wants this p
 
 **First feature (the practice run): instant read and tag on save.** When he shares a link, the Worker reads the page (plain fetch, Browser Run if that returns nothing useful) and Workers AI writes a short snippet and 1–3 English tags, then the bot replies with the title and tags. Login-walled links keep only his note and are left for the daily Claude task. The daily task then changes to "fill only what the Worker could not".
 
+Its spec is `specs/001-instant-read-tag/spec.md` (single links, existing cap of 10 per message).
+
+**Feature 002 (later): bulk sharing.** Split out of 001 after `/speckit-clarify` on 2026-11-15, because 30 links in one message is really backlog import, which was out of scope. Use these as `/speckit-specify` input when it starts:
+- Any number of links per message or across messages (30 should work), read through a queue; each link gets its own reply naming it, in the order they finish.
+- Temporary failures (error, timeout) retried a limited number of times (proposed: 3 attempts in all), then reported and left for the daily fill-in; permanent failures (login wall, removed post) never retried.
+- A message with 2 or more links gets an immediate "Saved N links, reading them now" reply and, once all are done, one summary: read / partly read / could not be read.
+- The daily fill-in must not work on a link the bot is still reading or retrying.
+- A status command stays out of scope.
+- Expect this to need a new service (a queue) to stay inside Worker request limits, so it needs a constitution principle V justification in its plan.
+
 **Lesson plan:**
 
 | # | Step | Focus |
