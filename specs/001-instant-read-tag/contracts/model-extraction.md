@@ -33,7 +33,7 @@ untrusted text, has no tools, and can only return two fields.
 
 | Situation | Result |
 |---|---|
-| Model times out, errors or returns unparsable text | Outcome `partial` if the page's own title or description exists, else `unread` (`error` or `timeout`) |
+| Model times out, errors or returns unparsable text | Outcome `partial` if the page's own title or description exists, else `unread/error` (the Worker cannot tell a model timeout from another failure, so the reason is always `error`) |
 | Valid snippet, no valid tag | `partial` |
 | Valid tag, no snippet | `partial`; the page's own description (cut to 400) is used as the snippet if there is one, which may make it `full` |
 | Both present | `full` |

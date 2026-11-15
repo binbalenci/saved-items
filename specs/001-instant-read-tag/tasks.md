@@ -163,10 +163,17 @@ snippet or tags.
   string, `null`, an array → `{ snippet: null, tags: [] }`; extra keys ignored; a snippet over 400
   characters is cut at 397 and ends with `...`; an empty or whitespace snippet becomes `null`;
   tags go through `normalizeTags`; a non-string snippet becomes `null`.
-- [ ] T014 [US1] In `worker/test/lib.test.ts` add failing tests for `isLoginWall(finalUrl,
-  html)`: true when the final URL matches `/login|signin|accounts\//i`; true when the page title
-  or `og:title` is a generic login title (the existing `GENERIC` pattern, e.g. `Log in to
-  Facebook`, `Instagram`); false for an ordinary page.
+- [ ] T014 [US1] In `worker/test/lib.test.ts` add failing tests for `isLoginUrl(url)` and
+  `isLoginWall(finalUrl, html)`. `isLoginUrl` is true when the host starts with `accounts.` or
+  `login.`, or when a path segment is exactly `login`, `signin`, `sign-in`, `login.php` or
+  `accounts` (case-insensitive). True: `https://www.instagram.com/accounts/login/?next=/p/abc`,
+  `https://www.facebook.com/login.php?next=x`, `https://accounts.google.com/signin/v2`,
+  `https://x.com/i/flow/login`. False (a word that merely appears inside a segment):
+  `https://example.com/blog/how-to-login-securely`,
+  `https://example.com/posts/signing-in-with-passkeys`,
+  `https://example.com/accounts-payable-guide`. `isLoginWall` is true when `isLoginUrl(finalUrl)`
+  is true, or when the page title or `og:title` is a generic login title (the existing `GENERIC`
+  pattern, e.g. `Log in to Facebook`, `Instagram`); false for an ordinary page.
 - [ ] T015 [US1] In `worker/test/lib.test.ts` add failing tests for `classifyRead`, whose
   `extraction` input has three states: `undefined` (the model has not run yet), `null` (the model
   failed or timed out) or `{ snippet, tags }`. Rules, in this order, apply in every state:
@@ -215,8 +222,10 @@ snippet or tags.
   of strings); snippet rule, quoted from `data-model.md`: "string, trimmed, 1–400 characters,
   original language. Over-long text is cut at 397 and ends with `...`"; an empty snippet becomes
   `null`; tags via `normalizeTags` with an empty existing list. T013 MUST pass.
-- [ ] T021 [US1] In `worker/src/lib.ts` export `isLoginWall(finalUrl: string, html: string):
-  boolean` as described in T014. Reuse the `GENERIC` pattern; do not change `parseMeta`'s return
+- [ ] T021 [US1] In `worker/src/lib.ts` export `isLoginUrl(url: string): boolean` and
+  `isLoginWall(finalUrl: string, html: string): boolean` as described in T014. `isLoginUrl`
+  parses the URL, checks the host prefix and compares whole path segments (split on `/`), never a
+  substring of the whole URL. Reuse the `GENERIC` pattern; do not change `parseMeta`'s return
   shape. T014 MUST pass.
 - [ ] T022 [US1] In `worker/src/lib.ts` export `classifyRead(input)` with `input: { fetchFailure:
   'timeout' | 'error' | null; status: number; contentType: string; loginWall: boolean; meta: {
@@ -251,17 +260,22 @@ snippet or tags.
   `null`. The owner's note is never sent.
 - [ ] T027 [US1] In `worker/src/index.ts` implement `readLink` for state `new`, in this order:
   1. `fetchPage`.
-  2. Re-key check (`research.md` R7): compute the final key with the existing `pickNorm`, look up
+  2. Re-key check (`research.md` R7): compute the final key with the existing `pickNorm` (change
+     `pickNorm` to call `isLoginUrl` instead of its inline `/login|signin|accounts\//i` regex, so
+     both places agree), look up
      any row holding it (`SELECT id, title, text, tags, note, enriched_at FROM items WHERE
      url_norm = ?`), and call `rekeyAction(currentKey, finalKey, otherRow, selfId, createdNow)`
      with `createdNow` from the link record (T009).
-     - `merge-and-delete`: merge the note into the other row with `mergeNote`, delete the row this
-       call created. If `isEnriched(otherRow)`, return a `known` block from the other row and skip
-       the rest. Otherwise continue and write into the other row.
+     - `merge-and-delete`: merge the note into the other row with `mergeNote` (set `noteAdded`
+       when the merge changed that row's note, so a `known` block can say "note added"), delete the
+       row this call created. If `isEnriched(otherRow)`, return a `known` block from the other row
+       and skip the rest. Otherwise continue and write into the other row.
      - `update-key`: `UPDATE items SET url_norm = ? WHERE id = ?`. If it fails with a unique-key
        error, re-select and take the `merge-and-delete` path.
      - `keep`: continue.
   3. Gate: call `classifyRead` with `extraction: undefined` and `loginWall` from `isLoginWall`.
+     If `fetchPage` returned a `fetchFailure`, pass `status: 0`, `contentType: ''`,
+     `bodyText: ''`, empty `meta` and `loginWall: false` (the `fetchFailure` rule fires first).
      If the result is `unread`, skip the model entirely and use that result. If it is `pending`,
      call `askModel` and then `classifyRead` again with the model's result (`null` when it
      failed).
