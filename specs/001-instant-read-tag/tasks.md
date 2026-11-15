@@ -172,8 +172,12 @@ snippet or tags.
   `https://example.com/blog/how-to-login-securely`,
   `https://example.com/posts/signing-in-with-passkeys`,
   `https://example.com/accounts-payable-guide`. `isLoginWall` is true when `isLoginUrl(finalUrl)`
-  is true, or when the page title or `og:title` is a generic login title (the existing `GENERIC`
-  pattern, e.g. `Log in to Facebook`, `Instagram`); false for an ordinary page.
+  is true, or when the page title or `og:title` is a generic login title, decided by `isGenericTitle`
+  (it replaced the old `GENERIC` pattern): a title is generic only when nothing is left after
+  removing login phrases (`log in`, `sign in`, `sign up`, `đăng nhập`, …), platform names and glue
+  words (`to`, `or`, `in`, …), e.g. `Log in to Facebook`, `Instagram`, `Log in • Instagram`; a title
+  that merely starts with a platform name (`Instagram tips for …`) is not generic, and glue words
+  alone (`In on and`) are not a wall; false for an ordinary page.
 - [X] T015 [US1] In `worker/test/lib.test.ts` add failing tests for `classifyRead`, whose
   `extraction` input has three states: `undefined` (the model has not run yet), `null` (the model
   failed or timed out) or `{ snippet, tags }`. Rules, in this order, apply in every state:
@@ -225,7 +229,7 @@ snippet or tags.
 - [X] T021 [US1] In `worker/src/lib.ts` export `isLoginUrl(url: string): boolean` and
   `isLoginWall(finalUrl: string, html: string): boolean` as described in T014. `isLoginUrl`
   parses the URL, checks the host prefix and compares whole path segments (split on `/`), never a
-  substring of the whole URL. Reuse the `GENERIC` pattern; do not change `parseMeta`'s return
+  substring of the whole URL. Use `isGenericTitle` (it replaced the old `GENERIC` pattern) for the title check; do not change `parseMeta`'s return
   shape. T014 MUST pass.
 - [X] T022 [US1] In `worker/src/lib.ts` export `classifyRead(input)` with `input: { fetchFailure:
   'timeout' | 'error' | null; status: number; contentType: string; loginWall: boolean; meta: {
@@ -398,11 +402,11 @@ partial row gets only its missing tags; no `note` or `starred` changes.
 
 ## Phase 6: Polish and Cross-Cutting
 
-- [ ] T041 In `docs/handoff.md` update "What exists" and the learning notes: feature 001 is
+- [X] T041 In `docs/handoff.md` update "What exists" and the learning notes: feature 001 is
   implemented (or its current state), the Worker now uses the Workers AI binding, and the daily
   task fills only empty fields. Correct line 72 so it says "tests and typecheck pass before commit
   to main".
-- [ ] T042 Final gate in `worker/`: `npm test` and `npx tsc --noEmit` both pass. Run `git diff
+- [X] T042 Final gate in `worker/`: `npm test` and `npx tsc --noEmit` both pass. Run `git diff
   --stat -- page/` and confirm it is empty (principle IV: the page is not changed).
 - [ ] T043 **MANUAL** After the Worker is deployed (Workers Builds, secrets, `/setup`, owner's
   Telegram ID; see the README), run `quickstart.md` sections 2, 3, 4 and 5 and tick the spec's
@@ -497,3 +501,10 @@ Task: "T004 index.ts constants and Env"   # then T005–T008 lib.ts helpers and 
   fully read" to everything.
 - Commit after each task or logical group, to `main`, only when `npm test` and `npx tsc --noEmit`
   pass (principle III).
+
+---
+
+## Phase 7: Convergence
+
+- [X] T045 In `docs/handoff.md` remove the Browser Run fallback from line 21 ("Workers AI and Browser Run") and from the "First feature" paragraph (line 45: "plain fetch, Browser Run if that returns nothing useful"), so both say the Worker uses one plain fetch plus the Workers AI binding and Browser Run is not used (plan: Constitution Check V, `research.md` R4) (partial)
+- [X] T046 Record of a fix made during review: login-wall detection in `worker/src/lib.ts` moved from a loose `GENERIC` pattern to `isGenericTitle`, so a title counts as a login wall only when it is nothing but login phrases, platform names and glue words (`Log in • Instagram` is a wall; `Instagram tips for …` and `In on and` are not), with tests in `worker/test/lib.test.ts` and T014 and T021 reworded to match (US1, FR-009)
