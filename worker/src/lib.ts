@@ -116,8 +116,18 @@ function metaContent(html: string, key: string): string | null {
   return v ? decodeEntities(v).trim() : null;
 }
 
-// Titles that login walls return instead of the post.
-const GENERIC = /^(facebook|instagram|threads|x|twitter|reddit|youtube|tiktok|linkedin|log ?in|sign ?in|login|đăng nhập)\b.{0,30}$/i;
+// A title is a login wall's only when it is nothing but platform names, login phrases and glue words
+// ("Instagram", "Log in • Instagram", "Facebook – log in or sign up"), not when a name merely starts it.
+const word = (alts: string) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts})(?![\\p{L}\\p{N}])`, 'giu');
+const LOGIN_PHRASE = word('log ?in|sign ?in|sign ?up|login|đăng nhập|đăng ký');
+const PLATFORM_NAME = word('facebook|instagram|threads|x|twitter|reddit|youtube|tiktok|linkedin');
+const GLUE = word('to|into|or|and|in|on|your|account');
+
+function isGenericTitle(title: string): boolean {
+  const lower = title.toLowerCase();
+  if (!lower.match(LOGIN_PHRASE) && !lower.match(PLATFORM_NAME)) return false;
+  return lower.replace(LOGIN_PHRASE, ' ').replace(PLATFORM_NAME, ' ').replace(GLUE, ' ').replace(/[^\p{L}\p{N}]+/gu, '') === '';
+}
 
 function rawTitle(html: string): string | null {
   const og = metaContent(html, 'og:title') ?? metaContent(html, 'twitter:title');
@@ -133,7 +143,7 @@ function cutSnippet(s: string): string {
 
 export function parseMeta(html: string): { title: string | null; text: string | null; author: string | null } {
   let title = rawTitle(html);
-  if (title && GENERIC.test(title)) title = null;
+  if (title && isGenericTitle(title)) title = null;
   let text = metaContent(html, 'og:description') ?? metaContent(html, 'description') ?? metaContent(html, 'twitter:description');
   if (text) text = cutSnippet(text);
   const author = metaContent(html, 'author') ?? metaContent(html, 'article:author') ?? metaContent(html, 'og:site_name');
@@ -303,7 +313,7 @@ export function isLoginUrl(url: string): boolean {
 export function isLoginWall(finalUrl: string, html: string): boolean {
   if (isLoginUrl(finalUrl)) return true;
   const t = rawTitle(html);
-  return !!t && GENERIC.test(t);
+  return !!t && isGenericTitle(t);
 }
 
 export type UnreadReason = 'login' | 'gone' | 'error' | 'timeout' | 'empty' | 'unsupported';
@@ -346,13 +356,30 @@ export function classifyRead(i: ReadInput): ReadResult {
   return { outcome: snippet && tags.length ? 'full' : 'partial', title, snippet, tags, author, status: 'ok' };
 }
 
-export interface BlockData { url: string; title: string | null; snippet: string | null; tags: string[]; noteAdded?: boolean }
+export interface BlockData {
+  url: string; title: string | null; snippet: string | null; tags: string[]; noteAdded?: boolean; reason?: UnreadReason;
+}
+
+const REASON_WORDS: Record<UnreadReason, string> = {
+  login: 'login wall', gone: 'the page is gone', error: 'the site returned an error',
+  timeout: 'it took too long', empty: 'there was too little text', unsupported: "it isn't a web page I can read",
+};
 
 /** Reply blocks from contracts/bot-replies.md. Every piece of page or model text is escaped. */
-export function formatBlock(kind: 'full' | 'known', d: BlockData): string {
-  const name = `<b>${escapeHtml(d.title ?? d.url)}</b>`;
-  const lines = [kind === 'full' ? `✓ ${name}` : `${d.noteAdded ? 'Already saved, note added:' : 'Already saved:'} ${name}`];
+export function formatBlock(kind: 'full' | 'known' | 'partial' | 'unread' | 'savefail', d: BlockData): string {
+  const url = escapeHtml(d.url);
+  const name = d.title ? `<b>${escapeHtml(d.title)}</b>` : url; // no title: the plain escaped URL
+  if (kind === 'savefail') return `⚠ I couldn't save this one, please send it again.\n${url}`;
+  if (kind === 'unread') {
+    return `⚠ Saved, but I couldn't read it (${REASON_WORDS[d.reason ?? 'error']}). Your note is kept; the daily fill-in will try.\n${name}`;
+  }
+  const head = { full: '✓', partial: '◐', known: d.noteAdded ? 'Already saved, note added:' : 'Already saved:' }[kind];
+  const lines = [`${head} ${name}`];
   if (d.snippet) lines.push(escapeHtml(d.snippet.length > 160 ? `${d.snippet.slice(0, 159)}…` : d.snippet));
   if (d.tags.length) lines.push(d.tags.map((t) => `#${escapeHtml(t)}`).join(' '));
+  if (kind === 'partial') {
+    const missing = [!d.title && 'a title', !d.snippet && 'a snippet', !d.tags.length && 'tags'].filter(Boolean);
+    lines.push(`Couldn't get ${missing.join(' and ')}; the daily fill-in will add what's missing.`);
+  }
   return lines.join('\n');
 }

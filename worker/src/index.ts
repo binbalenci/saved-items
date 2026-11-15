@@ -3,7 +3,7 @@ import {
   ftsQuery, helsinkiNow, isEnriched, isLoginUrl, isLoginWall, linkState, mergeNote, normalizeUrl, pageByteBudget,
   parseExtraction, parseMeta, rekeyAction,
 } from './lib.ts';
-import type { ReadResult } from './lib.ts';
+import type { ReadResult, UnreadReason } from './lib.ts';
 
 const MODEL = '@cf/zai-org/glm-4.7-flash';
 const FETCH_TIMEOUT_MS = 6000;
@@ -235,12 +235,9 @@ async function registerLink(env: Env, url: string, note: string, savedAt: string
 
 interface ReadContext { byteBudget: number; getExistingTags: () => Promise<string[]> }
 
-// Temporary until US2 (T033) replaces it with the contract's blocks.
-function interimBlock(link: Link, _outcome: { outcome: string; reason?: string } | null): string {
-  return link.state === 'failed'
-    ? `I couldn't save this one, please send it again.\n${escapeHtml(link.url)}`
-    : `Saved, but I couldn't fully read this one; the daily fill-in will try.\n${escapeHtml(link.url)}`;
-}
+const bare = (link: Link) => ({ url: link.url, title: null, snippet: null, tags: [] as string[] });
+const unreadBlock = (link: Link, reason: UnreadReason, title: string | null = null) =>
+  formatBlock('unread', { ...bare(link), title, reason });
 
 const selectByKey = (env: Env, key: string) =>
   env.DB.prepare(`SELECT ${ROW_COLS} FROM items WHERE url_norm = ?`).bind(key).first<Row>();
@@ -255,13 +252,17 @@ function parseTags(raw: string | null): string[] {
 const knownBlock = (link: Link, row: Row, noteAdded: boolean) =>
   formatBlock('known', { url: link.url, title: row.title, snippet: row.text, tags: parseTags(row.tags), noteAdded });
 
-/** A link saved just now: read it, write what was found, answer with its block (T027). */
-async function readNew(env: Env, link: Link, ctx: ReadContext): Promise<string> {
+type Existing = Pick<Row, 'title' | 'text' | 'author' | 'tags'>;
+const EMPTY_ROW: Existing = { title: null, text: null, author: null, tags: '[]' };
+
+/** Read a link (new, or saved earlier but not filled in), write what was found, answer with its block (T027, T034). */
+async function readFresh(env: Env, link: Link, ctx: ReadContext, startRow: Existing): Promise<string> {
   const page = await fetchPage(link.url, ctx.byteBudget);
   let rowId = link.id!;
-  let existing: Pick<Row, 'title' | 'text' | 'author' | 'tags'> = { title: null, text: null, author: null, tags: '[]' };
+  let existing = startRow;
 
   // Re-key check (research R7): a redirect may show this is the same entry as another row.
+  // Only a row this call just created can be re-keyed or deleted (rekeyAction returns 'keep' otherwise).
   const currentKey = normalizeUrl(link.url);
   const finalKey = page.fetchFailure ? currentKey : pickNorm(link.url, page.finalUrl);
   if (finalKey !== currentKey && link.createdNow) {
@@ -300,36 +301,38 @@ async function readNew(env: Env, link: Link, ctx: ReadContext): Promise<string> 
     const model = await askModel(env, await ctx.getExistingTags(), { title: page.meta.title, description: page.meta.text, text: page.bodyText });
     result = classifyRead({ ...input, extraction: model });
   }
-  if (result.outcome === 'pending') return interimBlock(link, { outcome: 'unread', reason: 'error' });
+  if (result.outcome === 'pending') return unreadBlock(link, 'error');
 
   // Write only what is still empty; never the note (FR-007).
   const fields = fillEmpty(existing, {
     title: result.title, text: result.snippet, author: result.author, tags: result.tags.length ? JSON.stringify(result.tags) : null,
   });
+  const final = { title: fields.title ?? existing.title, text: fields.text ?? existing.text, tags: fields.tags ?? existing.tags };
   const sets: string[] = Object.keys(fields).map((k) => `${k} = ?`); // keys come from fillEmpty, never from page text
   const vals: unknown[] = Object.values(fields);
-  if (result.status) { sets.push('status = ?'); vals.push(result.status); }
-  if (isEnriched({ text: fields.text ?? existing.text, tags: fields.tags ?? existing.tags })) {
-    sets.push("enriched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')");
-  }
+  if (result.status) { sets.push('status = ?'); vals.push(result.status); } // a successful read also revives a 'dead' row
+  if (isEnriched(final)) sets.push("enriched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')");
   if (sets.length) await env.DB.prepare(`UPDATE items SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, rowId).run();
 
-  return result.outcome === 'full'
-    ? formatBlock('full', { url: link.url, title: result.title, snippet: result.snippet, tags: result.tags })
-    : interimBlock(link, result);
+  if (result.outcome === 'unread') return unreadBlock(link, result.reason ?? 'error', final.title);
+  // Show the row as it now stands: a re-read may fill only part of it.
+  const data = { url: link.url, title: final.title, snippet: final.text, tags: parseTags(final.tags) };
+  return formatBlock(isEnriched(final) ? 'full' : 'partial', data);
 }
 
 /** A link already read: no fetch, no model (T028). */
 async function readKnown(env: Env, link: Link): Promise<string> {
   const row = await env.DB.prepare(`SELECT ${ROW_COLS} FROM items WHERE id = ?`).bind(link.id).first<Row>();
-  if (!row) return interimBlock(link, { outcome: 'unread', reason: 'error' });
+  if (!row) return unreadBlock(link, 'error');
   return knownBlock(link, row, link.noteAdded);
 }
 
 async function readLink(env: Env, link: Link, ctx: ReadContext): Promise<string> {
-  if (link.state === 'new') return readNew(env, link, ctx);
+  if (link.state === 'new') return readFresh(env, link, ctx, EMPTY_ROW);
   if (link.state === 'known') return readKnown(env, link);
-  return interimBlock(link, { outcome: 'unread', reason: 'error' }); // 'unfilled' arrives in US2 (T034)
+  // 'unfilled': saved before but not fully read; read again, fill only empty fields (createdNow is false).
+  const row = await env.DB.prepare(`SELECT ${ROW_COLS} FROM items WHERE id = ?`).bind(link.id).first<Row>();
+  return row ? readFresh(env, link, ctx, row) : unreadBlock(link, 'error');
 }
 
 async function processLinks(env: Env, msg: TgMessage, links: Link[]): Promise<void> {
@@ -342,13 +345,13 @@ async function processLinks(env: Env, msg: TgMessage, links: Link[]): Promise<vo
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<'deadline'>((resolve) => { timer = setTimeout(() => resolve('deadline'), DEADLINE_MS); });
     const blocks = await Promise.all(links.map(async (l) => {
-      if (l.state === 'failed') return interimBlock(l, null);
+      if (l.state === 'failed') return formatBlock('savefail', bare(l));
       try {
         const r = await Promise.race([readLink(env, l, context), deadline]);
-        return r === 'deadline' ? interimBlock(l, { outcome: 'unread', reason: 'timeout' }) : r;
+        return r === 'deadline' ? unreadBlock(l, 'timeout') : r;
       } catch (err) {
         logErr('read failed', err);
-        return interimBlock(l, { outcome: 'unread', reason: 'error' });
+        return unreadBlock(l, 'error');
       }
     }));
     if (timer !== undefined) clearTimeout(timer);

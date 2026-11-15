@@ -317,7 +317,7 @@ its empty fields are filled.
 
 ### Tests for User Story 2 (write first, they must fail)
 
-- [ ] T031 [US2] In `worker/test/lib.test.ts` add failing tests for `formatBlock` partial, unread
+- [X] T031 [US2] In `worker/test/lib.test.ts` add failing tests for `formatBlock` partial, unread
   and save-failed blocks matching `contracts/bot-replies.md`. Partial: `◐ <b>Title</b>`, the
   snippet if any, and `Couldn't get <list>; the daily fill-in will add what's missing.` with one
   test per row of the contract's table (tags; a snippet; a snippet and tags; a title; a title and
@@ -332,12 +332,12 @@ its empty fields are filled.
 
 ### Implementation for User Story 2
 
-- [ ] T032 [US2] In `worker/src/lib.ts` extend `formatBlock` with the partial, unread and
+- [X] T032 [US2] In `worker/src/lib.ts` extend `formatBlock` with the partial, unread and
   save-failed blocks and the reason wording from T031. T031 MUST pass.
-- [ ] T033 [US2] In `worker/src/index.ts` replace `interimBlock` (T010) everywhere: a `partial`
+- [X] T033 [US2] In `worker/src/index.ts` replace `interimBlock` (T010) everywhere: a `partial`
   outcome uses the `partial` block, an `unread` outcome uses the `unread` block with its reason,
   and a link in state `failed` uses the `savefail` block. Delete `interimBlock`.
-- [ ] T034 [US2] In `worker/src/index.ts` implement `readLink` for state `unfilled` (a link saved
+- [X] T034 [US2] In `worker/src/index.ts` implement `readLink` for state `unfilled` (a link saved
   before but not fully read): read it again like a new link (T027 steps 1–5). `createdNow` is false
   for these rows, so `rekeyAction` returns `keep` and the row is never re-keyed or deleted. Write
   only what `fillEmpty` returns; set `enriched_at` only when `isEnriched` is true for the row
@@ -345,7 +345,7 @@ its empty fields are filled.
   row the daily task had marked `dead`; an `unread` result leaves `status` unchanged. The note is
   already merged by the request path (T009). Add `unfilled` to the `readLink` dispatch in
   `processLinks`.
-- [ ] T035 [US2] In `worker/src/index.ts` verify the four failure paths and fix any that do not
+- [X] T035 [US2] In `worker/src/index.ts` verify the four failure paths and fix any that do not
   behave as stated:
   1. A fetch abort calls `classifyRead` with `fetchFailure: 'timeout'`.
   2. A model throw or timeout makes `askModel` return `null`, which gives `partial` (or
@@ -356,7 +356,7 @@ its empty fields are filled.
   Paths 1 and 2 are covered by the unit tests plus `quickstart.md`; path 3 by the quickstart row
   "all slow pages"; path 4 by code review of T009, T010 and T033 only (it cannot be triggered
   on a live bot).
-- [ ] T036 [US2] Run `npm test` and `npx tsc --noEmit` in `worker/`; both MUST pass.
+- [X] T036 [US2] Run `npm test` and `npx tsc --noEmit` in `worker/`; both MUST pass.
 
 **Checkpoint**: User Stories 1 and 2 both work. The bot never loses a save and never invents
 details.
@@ -372,12 +372,12 @@ partial row gets only its missing tags; no `note` or `starred` changes.
 
 **Depends on**: nothing in `worker/`; can run in parallel with US1 and US2.
 
-- [ ] T037 [P] [US3] In `docs/daily-task.md` replace the step 1 write-back statement with one
+- [X] T037 [P] [US3] In `docs/daily-task.md` replace the step 1 write-back statement with one
   that fills only empty fields: `UPDATE items SET title = coalesce(nullif(title,''), ?), text =
   coalesce(nullif(text,''), ?), author = coalesce(nullif(author,''), ?), tags = CASE WHEN tags =
   '[]' THEN ? ELSE tags END, status = ?, enriched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE
   id = ?`. Keep the existing sentence that params are strings and null is the JSON null.
-- [ ] T038 [P] [US3] In `docs/daily-task.md` step 1: change the work query's select list to
+- [X] T038 [P] [US3] In `docs/daily-task.md` step 1: change the work query's select list to
   `SELECT id, url, platform, title, text, author, note, tags, saved_at …` (it keeps `WHERE
   enriched_at IS NULL`, because the Worker sets `enriched_at` only when a snippet and a tag were
   produced, so fully read links are skipped). Add the rules that go with it: for a row that
@@ -388,7 +388,7 @@ partial row gets only its missing tags; no `note` or `starred` changes.
   ("🔖 Saved items: daily fill-in + Friday digest") so its prompt equals the new
   `docs/daily-task.md` (`CLAUDE.md`: they change together). Tick this only after the owner has
   done it.
-- [ ] T040 [P] [US3] In `README.md` add to "Worker setup" that the Workers AI binding (`AI`) is
+- [X] T040 [P] [US3] In `README.md` add to "Worker setup" that the Workers AI binding (`AI`) is
   declared in `worker/wrangler.toml`, needs no secret, and that local runs use
   `npx wrangler dev --remote` because the AI binding runs remotely.
 

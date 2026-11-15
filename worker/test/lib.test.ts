@@ -181,6 +181,18 @@ test('isLoginWall uses the url or a generic login title', () => {
   assert.equal(isLoginWall('https://example.com/a', '<title>How Workers AI prices neurons</title>'), false);
 });
 
+test('isLoginWall: a platform name merely starting the title is not a login wall', () => {
+  for (const t of ['YouTube tips for beginners', 'X marks the spot']) {
+    assert.equal(isLoginWall('https://example.com/a', `<title>${t}</title>`), false, t);
+    assert.equal(parseMeta(`<title>${t}</title>`).title, t, t); // the title is kept too
+  }
+  for (const t of ['Log in • Instagram', 'Instagram', 'Facebook – log in or sign up', 'Sign in to X', 'Đăng nhập']) {
+    assert.equal(isLoginWall('https://example.com/a', `<title>${t}</title>`), true, t);
+    assert.equal(parseMeta(`<title>${t}</title>`).title, null, t);
+  }
+  assert.equal(isLoginWall('https://example.com/a', '<title>In on and</title>'), false); // glue words alone are not a wall
+});
+
 const base = {
   fetchFailure: null, status: 200, contentType: 'text/html', loginWall: false,
   meta: { title: 'T', text: null as string | null, author: 'A' }, bodyText: 'x'.repeat(300),
@@ -248,8 +260,36 @@ test('formatBlock full and known', () => {
   assert.equal(formatBlock('full', data), '✓ <b>Tom &amp; &lt;Jerry&gt;</b>\nShort &lt;b&gt;\n#ai #x1');
   const long = formatBlock('full', { ...data, snippet: 'a'.repeat(300) }).split('\n')[1];
   assert.equal(long, 'a'.repeat(159) + '…');
-  assert.equal(formatBlock('full', { ...data, title: null }).split('\n')[0], '✓ <b>https://e.com/a</b>');
+  assert.equal(formatBlock('full', { ...data, title: null }).split('\n')[0], '✓ https://e.com/a'); // no title: plain escaped URL
   assert.equal(formatBlock('known', data), 'Already saved: <b>Tom &amp; &lt;Jerry&gt;</b>\nShort &lt;b&gt;\n#ai #x1');
   assert.equal(formatBlock('known', { ...data, noteAdded: true }).split('\n')[0], 'Already saved, note added: <b>Tom &amp; &lt;Jerry&gt;</b>');
   assert.equal(formatBlock('known', { ...data, snippet: null, tags: [] }), 'Already saved: <b>Tom &amp; &lt;Jerry&gt;</b>');
+});
+
+test('formatBlock partial names exactly what is missing', () => {
+  const d = { url: 'https://e.com/a', title: 'Title', snippet: 'Snip', tags: ['ai'] };
+  const last = (x: object) => formatBlock('partial', { ...d, ...x }).split('\n').pop();
+  const tail = "; the daily fill-in will add what's missing.";
+  assert.equal(formatBlock('partial', { ...d, tags: [] }), `◐ <b>Title</b>\nSnip\nCouldn't get tags${tail}`);
+  assert.equal(last({ snippet: null }), `Couldn't get a snippet${tail}`);
+  assert.equal(last({ snippet: null, tags: [] }), `Couldn't get a snippet and tags${tail}`);
+  assert.equal(last({ title: null }), `Couldn't get a title${tail}`);
+  assert.equal(last({ title: null, tags: [] }), `Couldn't get a title and tags${tail}`);
+  assert.equal(last({ title: null, snippet: null }), `Couldn't get a title and a snippet${tail}`);
+  // title line falls back to the plain URL; tags found are still shown; everything escaped
+  assert.equal(formatBlock('partial', { ...d, title: null, snippet: null }).split('\n')[0], '◐ https://e.com/a');
+  assert.equal(formatBlock('partial', { ...d, title: null, snippet: null }).split('\n')[1], '#ai');
+  assert.equal(formatBlock('partial', { ...d, title: 'A & <B>', tags: [], snippet: '<i>' }).split('\n').slice(0, 2).join('|'), '◐ <b>A &amp; &lt;B&gt;</b>|&lt;i&gt;');
+});
+
+test('formatBlock unread and save-failed', () => {
+  const d = { url: 'https://e.com/a?x=1&y=<2>', title: null, snippet: null, tags: [] as string[] };
+  const head = (r: string) => `⚠ Saved, but I couldn't read it (${r}). Your note is kept; the daily fill-in will try.`;
+  const words: Array<[Parameters<typeof formatBlock>[1]['reason'], string]> = [
+    ['login', 'login wall'], ['gone', 'the page is gone'], ['error', 'the site returned an error'],
+    ['timeout', 'it took too long'], ['empty', 'there was too little text'], ['unsupported', "it isn't a web page I can read"],
+  ];
+  for (const [reason, w] of words) assert.equal(formatBlock('unread', { ...d, reason }), `${head(w)}\nhttps://e.com/a?x=1&amp;y=&lt;2&gt;`, reason);
+  assert.equal(formatBlock('unread', { ...d, title: 'Tom & Co', reason: 'gone' }), `${head('the page is gone')}\n<b>Tom &amp; Co</b>`);
+  assert.equal(formatBlock('savefail', d), '⚠ I couldn\'t save this one, please send it again.\nhttps://e.com/a?x=1&amp;y=&lt;2&gt;');
 });
