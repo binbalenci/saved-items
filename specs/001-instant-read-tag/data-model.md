@@ -13,7 +13,7 @@ No schema change and no migration. Everything uses the existing `items` columns 
 | `text` (snippet) | After reading | Model snippet, else the page's own description; at most 400 characters (FR-004). Existing rows are untouched |
 | `tags` | After reading | JSON array of 1–3 lowercase English strings, or `[]` |
 | `author` | After reading | As today, from page meta tags |
-| `status` | After reading | `ok` when something was read, else `unknown`. `dead` stays with the daily task |
+| `status` | After reading | `ok` for a `full` or `partial` read, including a row the daily task had marked `dead` (the page loads now). An `unread` result leaves `status` unchanged. Marking a page `dead` stays with the daily task |
 | `enriched_at` | After reading | Set only when `text` and at least one tag were produced. This is what "filled in" means (FR-005) |
 
 The daily fill-in fills only fields that are still empty (`title`, `text`, `author` null or
@@ -32,6 +32,10 @@ Produced per link by the Worker; drives the reply line and the update.
 
 Reasons carried for the `unread` line: `login`, `gone` (404/410 or a removed-post page),
 `error`, `timeout`, `empty` (too little text), `unsupported` (not HTML).
+
+Before the model runs, `classifyRead` is called once with no extraction as a gate. It returns an
+`unread` outcome (and the model is skipped) or `pending` (go on and call the model). `pending`
+is never stored or shown. After the model, `classifyRead` is called again with the result.
 
 ## Reply (one Telegram message set per user message)
 
@@ -69,7 +73,7 @@ that already existed is never re-keyed or deleted.
 | `checkSender(allowedId, fromId)` | no `fromId` → `none`; unset or blank `allowedId` → `unconfigured`; id differs → `stranger`; id equals `allowedId` (trimmed) → `allowed` |
 | `linkState(existing)` | no row → `new`; row with `enriched_at` → `known`; row without it → `unfilled` |
 | `rekeyAction(currentKey, finalKey, otherRow, selfId, createdNow)` | `createdNow` false → `keep` (a pre-existing row is never deleted or re-keyed); keys equal → `keep`; another row (different id) holds `finalKey` → `merge-and-delete`; otherwise `update-key` |
-| `isEnriched(row)` | true only when `text` is non-empty and `tags` parses to an array of at least 1 |
+| `isEnriched(row)` | true only when `text` is non-empty and `tags` parses to an array of at least 1. This is the only rule for "filled in"; the read classification carries no enriched flag |
 | `fillEmpty(existing, found)` | returns only fields to write: `title`, `text`, `author` when the existing value is null or empty; `tags` when it is `[]`; never `note` |
 
 ## Validation rules
