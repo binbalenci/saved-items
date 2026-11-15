@@ -119,15 +119,23 @@ function metaContent(html: string, key: string): string | null {
 // Titles that login walls return instead of the post.
 const GENERIC = /^(facebook|instagram|threads|x|twitter|reddit|youtube|tiktok|linkedin|log ?in|sign ?in|login|đăng nhập)\b.{0,30}$/i;
 
+function rawTitle(html: string): string | null {
+  const og = metaContent(html, 'og:title') ?? metaContent(html, 'twitter:title');
+  if (og) return og;
+  const t = /<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1];
+  return t ? decodeEntities(t).trim() || null : null;
+}
+
+/** Cut to 400 characters: 397 plus "..." (FR-004). */
+function cutSnippet(s: string): string {
+  return s.length > 400 ? `${s.slice(0, 397)}...` : s;
+}
+
 export function parseMeta(html: string): { title: string | null; text: string | null; author: string | null } {
-  let title = metaContent(html, 'og:title') ?? metaContent(html, 'twitter:title');
-  if (!title) {
-    const t = /<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1];
-    title = t ? decodeEntities(t).trim() : null;
-  }
+  let title = rawTitle(html);
   if (title && GENERIC.test(title)) title = null;
   let text = metaContent(html, 'og:description') ?? metaContent(html, 'description') ?? metaContent(html, 'twitter:description');
-  if (text && text.length > 600) text = `${text.slice(0, 597)}...`;
+  if (text) text = cutSnippet(text);
   const author = metaContent(html, 'author') ?? metaContent(html, 'article:author') ?? metaContent(html, 'og:site_name');
   return { title: title || null, text: text || null, author: author || null };
 }
@@ -158,4 +166,193 @@ export function chunk(text: string, max = 4000): string[] {
   }
   if (cur) out.push(cur);
   return out;
+}
+
+/** Bytes to read per page: min(64 KB, 320 KB / links), so one message never reads more than 320 KB (research R9). */
+export function pageByteBudget(linkCount: number): number {
+  return Math.min(65536, Math.floor(327680 / Math.max(1, linkCount)));
+}
+
+export function checkSender(allowedId: string | undefined, fromId: number | undefined): 'none' | 'unconfigured' | 'stranger' | 'allowed' {
+  if (!fromId) return 'none';
+  const allowed = allowedId?.trim();
+  if (!allowed) return 'unconfigured';
+  return String(fromId) === allowed ? 'allowed' : 'stranger';
+}
+
+export function linkState(existing: { enriched_at: string | null } | null): 'new' | 'known' | 'unfilled' {
+  if (!existing) return 'new';
+  return existing.enriched_at ? 'known' : 'unfilled';
+}
+
+/** A row this call did not just create is never re-keyed or deleted. */
+export function rekeyAction(
+  currentKey: string, finalKey: string, otherRow: { id: number } | null, selfId: number, createdNow: boolean,
+): 'keep' | 'update-key' | 'merge-and-delete' {
+  if (!createdNow || currentKey === finalKey) return 'keep';
+  return otherRow && otherRow.id !== selfId ? 'merge-and-delete' : 'update-key';
+}
+
+/** The one rule for "filled in": a snippet and at least one tag. */
+export function isEnriched(row: { text: string | null; tags: string | null }): boolean {
+  if (!row.text) return false;
+  try {
+    const t = JSON.parse(row.tags ?? '');
+    return Array.isArray(t) && t.length >= 1;
+  } catch { return false; }
+}
+
+/** Only the fields that are still empty; never `note` (FR-007, FR-014). */
+export function fillEmpty(
+  existing: { title: string | null; text: string | null; author: string | null; tags: string | null },
+  found: { title?: string | null; text?: string | null; author?: string | null; tags?: string | null; note?: unknown },
+): { title?: string; text?: string; author?: string; tags?: string } {
+  const out: { title?: string; text?: string; author?: string; tags?: string } = {};
+  for (const k of ['title', 'text', 'author'] as const) {
+    if (!existing[k] && found[k]) out[k] = found[k]!;
+  }
+  if (existing.tags === '[]' && found.tags) out.tags = found.tags;
+  return out;
+}
+
+const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'svg']);
+
+/** Visible text in one linear pass: no DOM, no whole-document regex. Stops once maxChars are collected. */
+export function extractText(html: string, maxChars: number): string {
+  const lc = html.toLowerCase();
+  const n = html.length;
+  const nameAt = /<([a-z][a-z0-9]*)/y;
+  let out = '';
+  let i = 0;
+  while (i < n && out.length < maxChars) {
+    const lt = html.indexOf('<', i);
+    const end = lt < 0 ? n : lt;
+    if (end > i) out += html.slice(i, end).replace(/\s+/g, ' ');
+    if (lt < 0) break;
+    i = lt;
+    if (lc.startsWith('<!--', i)) {
+      const close = html.indexOf('-->', i + 4);
+      i = close < 0 ? n : close + 3;
+      out += ' ';
+      continue;
+    }
+    nameAt.lastIndex = i;
+    const name = nameAt.exec(lc)?.[1];
+    if (name && SKIP_TAGS.has(name)) {
+      const close = lc.indexOf(`</${name}`, i);
+      const gt = close < 0 ? -1 : html.indexOf('>', close);
+      i = gt < 0 ? n : gt + 1;
+      out += ' ';
+      continue;
+    }
+    if (!name && !/[\/!?]/.test(html[i + 1] ?? '')) { out += '<'; i += 1; continue; } // a lone "<" in text
+    const gt = html.indexOf('>', i);
+    i = gt < 0 ? n : gt + 1;
+    out += ' ';
+  }
+  return decodeEntities(out).replace(/\s+/g, ' ').trim().slice(0, maxChars);
+}
+
+/** Tag rule from data-model.md: reject a tag with anything but a-z, 0-9, spaces and hyphens, then tidy. */
+export function normalizeTags(raw: unknown, existing: string[]): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const t of raw) {
+    if (typeof t !== 'string') continue;
+    const trimmed = t.trim();
+    let tag: string;
+    if (existing.includes(trimmed)) tag = trimmed; // FR-006: reuse an existing tag as-is
+    else {
+      const lower = trimmed.toLowerCase();
+      if (!/^[a-z0-9 -]+$/.test(lower)) continue;
+      tag = lower.replace(/ /g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+      if (tag.length < 2 || tag.length > 30) continue;
+    }
+    if (!out.includes(tag)) out.push(tag);
+    if (out.length === 3) break;
+  }
+  return out;
+}
+
+/** Read the model's reply: only `snippet` and `tags` are taken (contracts/model-extraction.md). */
+export function parseExtraction(raw: unknown): { snippet: string | null; tags: string[] } {
+  const none = { snippet: null, tags: [] };
+  if (typeof raw !== 'string') return none;
+  const a = raw.indexOf('{');
+  const b = raw.lastIndexOf('}');
+  if (a < 0 || b <= a) return none;
+  let obj: unknown;
+  try { obj = JSON.parse(raw.slice(a, b + 1)); } catch { return none; }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return none;
+  const { snippet, tags } = obj as { snippet?: unknown; tags?: unknown };
+  const s = typeof snippet === 'string' ? snippet.trim() : '';
+  return { snippet: s ? cutSnippet(s) : null, tags: normalizeTags(tags, []) };
+}
+
+const LOGIN_SEGMENTS = new Set(['login', 'signin', 'sign-in', 'login.php', 'accounts']);
+
+/** Whole host prefix or whole path segment, never a substring of the URL. */
+export function isLoginUrl(url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  const host = u.hostname.toLowerCase();
+  if (host.startsWith('accounts.') || host.startsWith('login.')) return true;
+  return u.pathname.toLowerCase().split('/').some((seg) => LOGIN_SEGMENTS.has(seg));
+}
+
+export function isLoginWall(finalUrl: string, html: string): boolean {
+  if (isLoginUrl(finalUrl)) return true;
+  const t = rawTitle(html);
+  return !!t && GENERIC.test(t);
+}
+
+export type UnreadReason = 'login' | 'gone' | 'error' | 'timeout' | 'empty' | 'unsupported';
+
+export interface ReadInput {
+  fetchFailure: 'timeout' | 'error' | null;
+  status: number;
+  contentType: string;
+  loginWall: boolean;
+  meta: { title: string | null; text: string | null; author: string | null };
+  bodyText: string;
+  /** undefined: model not run yet; null: model failed or timed out. */
+  extraction: { snippet: string | null; tags: string[] } | null | undefined;
+}
+
+export type ReadResult =
+  | { outcome: 'pending' }
+  | {
+      outcome: 'full' | 'partial' | 'unread'; reason?: UnreadReason;
+      title: string | null; snippet: string | null; tags: string[]; author: string | null; status: 'ok' | null;
+    };
+
+/** The gate before the model and the verdict after it (one rule list, so unreadable pages never reach the model). */
+export function classifyRead(i: ReadInput): ReadResult {
+  const unread = (reason: UnreadReason): ReadResult => ({
+    outcome: 'unread', reason, title: i.loginWall ? null : i.meta.title, snippet: null, tags: [], author: null, status: null,
+  });
+  if (i.fetchFailure) return unread(i.fetchFailure);
+  if (i.loginWall) return unread('login');
+  if (i.status === 404 || i.status === 410) return unread('gone');
+  if (i.status < 200 || i.status >= 300) return unread('error');
+  if (!i.contentType.includes('html')) return unread('unsupported');
+  if (i.bodyText.length < 200 && !((i.meta.text?.length ?? 0) >= 80)) return unread('empty');
+  if (i.extraction === undefined) return { outcome: 'pending' };
+
+  const snippet = i.extraction?.snippet ?? (i.meta.text ? cutSnippet(i.meta.text) : null);
+  const tags = i.extraction?.tags ?? [];
+  const { title, author } = i.meta;
+  if (!snippet && !tags.length && !title) return unread('error');
+  return { outcome: snippet && tags.length ? 'full' : 'partial', title, snippet, tags, author, status: 'ok' };
+}
+
+export interface BlockData { url: string; title: string | null; snippet: string | null; tags: string[]; noteAdded?: boolean }
+
+/** Reply blocks from contracts/bot-replies.md. Every piece of page or model text is escaped. */
+export function formatBlock(kind: 'full' | 'known', d: BlockData): string {
+  const name = `<b>${escapeHtml(d.title ?? d.url)}</b>`;
+  const lines = [kind === 'full' ? `✓ ${name}` : `${d.noteAdded ? 'Already saved, note added:' : 'Already saved:'} ${name}`];
+  if (d.snippet) lines.push(escapeHtml(d.snippet.length > 160 ? `${d.snippet.slice(0, 159)}…` : d.snippet));
+  if (d.tags.length) lines.push(d.tags.map((t) => `#${escapeHtml(t)}`).join(' '));
+  return lines.join('\n');
 }

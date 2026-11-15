@@ -10,6 +10,10 @@ database_name = "saved-items"
 database_id = "eff1c7bb-ed60-48dd-9140-46047a637855"
 migrations_dir = "migrations"
 
+# Workers AI: no secret needed. Runs remotely even under `wrangler dev`.
+[ai]
+binding = "AI"
+
 [triggers]
 # Friday 06:32 Helsinki = 04:32 UTC in winter, 03:32 UTC in summer. The Worker checks local time.
 crons = ["32 3 * * 5", "32 4 * * 5"]

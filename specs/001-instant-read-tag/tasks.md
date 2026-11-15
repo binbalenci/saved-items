@@ -41,12 +41,12 @@ each test task first and watch it fail.
 
 **Purpose**: make the existing gate runnable and add the one new binding.
 
-- [ ] T001 [P] In `worker/package.json` change the `test` script to
+- [X] T001 [P] In `worker/package.json` change the `test` script to
   `node --experimental-strip-types --test test/*.test.ts`. Run `npm test` in `worker/`: the 11
   existing tests MUST pass (on Node 22.15 they currently fail with `ERR_UNKNOWN_FILE_EXTENSION`).
-- [ ] T002 [P] In `worker/wrangler.toml` add the Workers AI binding:
+- [X] T002 [P] In `worker/wrangler.toml` add the Workers AI binding:
   `[ai]` with `binding = "AI"`. It needs no secret.
-- [ ] T003 Run `npx tsc --noEmit` in `worker/` before any code change and record the result in the
+- [X] T003 Run `npx tsc --noEmit` in `worker/` before any code change and record the result in the
   commit message or notes. If it already fails, stop and report; do not fix unrelated errors.
 
 ---
@@ -58,18 +58,18 @@ shell that every story plugs into. No user-visible reading yet.
 
 **⚠️ CRITICAL**: no story work starts until T004–T010 are done.
 
-- [ ] T004 In `worker/src/index.ts` add `AI: Ai;` to `Env` (comment: Workers AI binding, no
+- [X] T004 In `worker/src/index.ts` add `AI: Ai;` to `Env` (comment: Workers AI binding, no
   secret) and a constants block at the top: `MODEL = '@cf/zai-org/glm-4.7-flash'`,
   `FETCH_TIMEOUT_MS = 6000`, `MODEL_TIMEOUT_MS = 12000`, `DEADLINE_MS = 25000`, `MAX_LINKS = 10`,
   `PAGE_TEXT_CHARS = 6000`, `MODEL_MAX_TOKENS = 300`, `EXISTING_TAGS_LIMIT = 100`. Use
   `FETCH_TIMEOUT_MS` in place of the literal `6000` and `MAX_LINKS` in place of the literal `10`
   in the existing code.
-- [ ] T005 In `worker/test/lib.test.ts` add a failing test for `pageByteBudget(linkCount)`:
+- [X] T005 In `worker/test/lib.test.ts` add a failing test for `pageByteBudget(linkCount)`:
   1 link → 65536, 5 links → 65536, 6 links → 54613, 10 links → 32768, 0 links → 65536 (treated as 1).
-- [ ] T006 In `worker/src/lib.ts` export `pageByteBudget(linkCount: number): number` returning
+- [X] T006 In `worker/src/lib.ts` export `pageByteBudget(linkCount: number): number` returning
   `Math.min(65536, Math.floor(327680 / Math.max(1, linkCount)))` (research R9: `min(64 KB, 320 KB ÷
   links)`). T005 MUST now pass.
-- [ ] T007 In `worker/test/lib.test.ts` add failing tests for the five decision functions
+- [X] T007 In `worker/test/lib.test.ts` add failing tests for the five decision functions
   (`data-model.md`, "Decision functions"):
   - `checkSender(allowedId, fromId)`: no `fromId` → `'none'`; `allowedId` undefined or blank →
     `'unconfigured'`; `fromId` differs → `'stranger'`; `fromId` equals `allowedId` with
@@ -86,10 +86,10 @@ shell that every story plugs into. No user-visible reading yet.
   - `fillEmpty(existing, found)`: `title`, `text` and `author` are in the result only when the
     existing value is null or empty; `tags` only when the existing value is `'[]'`; `note` is
     never in the result (FR-007, FR-014).
-- [ ] T008 In `worker/src/lib.ts` export `checkSender`, `linkState`, `rekeyAction`, `isEnriched`
+- [X] T008 In `worker/src/lib.ts` export `checkSender`, `linkState`, `rekeyAction`, `isEnriched`
   and `fillEmpty` exactly as the table in `data-model.md` ("Decision functions") defines them.
   T007 MUST now pass.
-- [ ] T009 In `worker/src/index.ts` build the request path. Change `fetch(req, env)` to
+- [X] T009 In `worker/src/index.ts` build the request path. Change `fetch(req, env)` to
   `fetch(req, env, ctx)` and pass `ctx` to `handleMessage`. Keep the secret-header check, the
   `/find` and help commands and `extractLinks` as they are. Replace the inline allow-list code
   with `checkSender` and keep its behavior: `none` returns, `unconfigured` sends the existing
@@ -112,7 +112,7 @@ shell that every story plugs into. No user-visible reading yet.
   noteAdded }`. All of this happens before the handler returns `ok` (FR-001). Then call
   `ctx.waitUntil(processLinks(...))` and return. Apply the same logging rule to the existing
   `console.error('update failed', err)` in the handler. A message with no links keeps today's reply.
-- [ ] T010 In `worker/src/index.ts` add the background shell `processLinks(env, msg, links)`. Build
+- [X] T010 In `worker/src/index.ts` add the background shell `processLinks(env, msg, links)`. Build
   `context = { byteBudget, getExistingTags }`: `byteBudget` is `pageByteBudget(number of links)`
   and `getExistingTags` is a memoized async function, so the tags query runs once per message and
   only if some link reaches the model. Links in state `failed` are not read. Every other link runs
@@ -147,23 +147,23 @@ snippet or tags.
 
 ### Tests for User Story 1 (write first, they must fail)
 
-- [ ] T011 [US1] In `worker/test/lib.test.ts` add failing tests for `extractText(html, maxChars)`:
+- [X] T011 [US1] In `worker/test/lib.test.ts` add failing tests for `extractText(html, maxChars)`:
   skips `script`, `style`, `noscript`, `svg` and comment blocks; strips tags; decodes entities
   (`&amp;`, `&#39;`, `&nbsp;`) in the collected text; collapses whitespace; stops at `maxChars`
   (6,000 in production) even on a much longer page; returns `''` for markup with no text.
-- [ ] T012 [US1] In `worker/test/lib.test.ts` add failing tests for `normalizeTags(raw, existing)`:
+- [X] T012 [US1] In `worker/test/lib.test.ts` add failing tests for `normalizeTags(raw, existing)`:
   lowercases and trims; spaces become `-`; repeated `-` collapse and a leading or trailing `-` is
   removed; only 2–30 character tags are kept; duplicates removed; the first 3 are kept;
   non-strings ignored; a tag equal to an existing tag is returned unchanged (FR-006). A tag with
   anything other than `a-z`, `0-9`, spaces and hyphens is rejected whole, not cleaned: `"học máy"`
   is dropped, `"ai_tools"` is dropped, `"c++"` is dropped; `"AI  Tools"` becomes `"ai-tools"`;
   `"web3"` stays; `"-x-"` becomes `"x"` and is dropped for being under 2 characters (FR-003).
-- [ ] T013 [US1] In `worker/test/lib.test.ts` add failing tests for `parseExtraction(raw)`: plain
+- [X] T013 [US1] In `worker/test/lib.test.ts` add failing tests for `parseExtraction(raw)`: plain
   JSON; JSON inside prose or a code fence (the first `{…}` object is used); not JSON, empty
   string, `null`, an array → `{ snippet: null, tags: [] }`; extra keys ignored; a snippet over 400
   characters is cut at 397 and ends with `...`; an empty or whitespace snippet becomes `null`;
   tags go through `normalizeTags`; a non-string snippet becomes `null`.
-- [ ] T014 [US1] In `worker/test/lib.test.ts` add failing tests for `isLoginUrl(url)` and
+- [X] T014 [US1] In `worker/test/lib.test.ts` add failing tests for `isLoginUrl(url)` and
   `isLoginWall(finalUrl, html)`. `isLoginUrl` is true when the host starts with `accounts.` or
   `login.`, or when a path segment is exactly `login`, `signin`, `sign-in`, `login.php` or
   `accounts` (case-insensitive). True: `https://www.instagram.com/accounts/login/?next=/p/abc`,
@@ -174,7 +174,7 @@ snippet or tags.
   `https://example.com/accounts-payable-guide`. `isLoginWall` is true when `isLoginUrl(finalUrl)`
   is true, or when the page title or `og:title` is a generic login title (the existing `GENERIC`
   pattern, e.g. `Log in to Facebook`, `Instagram`); false for an ordinary page.
-- [ ] T015 [US1] In `worker/test/lib.test.ts` add failing tests for `classifyRead`, whose
+- [X] T015 [US1] In `worker/test/lib.test.ts` add failing tests for `classifyRead`, whose
   `extraction` input has three states: `undefined` (the model has not run yet), `null` (the model
   failed or timed out) or `{ snippet, tags }`. Rules, in this order, apply in every state:
   `fetchFailure` set → `unread` with that reason (`timeout` or `error`); `loginWall` true →
@@ -191,7 +191,7 @@ snippet or tags.
   `status: 'ok'`. An `unread` result has `status: null` (leave the row's status unchanged), may
   carry a `title` (when found, never a generic login title) but never a snippet or tags, and a
   login wall never carries a snippet. The result has no `enriched` field.
-- [ ] T016 [US1] In `worker/test/lib.test.ts` add failing tests for `formatBlock` full and known
+- [X] T016 [US1] In `worker/test/lib.test.ts` add failing tests for `formatBlock` full and known
   blocks, matching `contracts/bot-replies.md` exactly: `✓ <b>Title</b>` line, snippet cut to 160
   characters ending with `…`, a tags line `#tag1 #tag2`, and `Already saved: <b>Title</b>` for a
   known link (`Already saved, note added:` when a note was added). When the title is null the
@@ -201,44 +201,44 @@ snippet or tags.
 
 ### Implementation for User Story 1
 
-- [ ] T017 [US1] In `worker/src/lib.ts` change `parseMeta` so a description longer than 400
+- [X] T017 [US1] In `worker/src/lib.ts` change `parseMeta` so a description longer than 400
   characters is cut to 397 characters plus `...` (it is 600 and 597 today; FR-004). Do not change
   the shape of its return value (`{ title, text, author }`); the existing deepEqual test depends
   on it.
-- [ ] T018 [US1] In `worker/src/lib.ts` export `extractText(html: string, maxChars: number):
+- [X] T018 [US1] In `worker/src/lib.ts` export `extractText(html: string, maxChars: number):
   string`. One linear pass, no DOM, no whole-document regex. Skip `script`, `style`, `noscript`,
   `svg` and comment blocks using `indexOf`; strip tags; collapse whitespace; stop as soon as
   `maxChars` characters of text are collected; decode entities only on the collected text, using
   the existing `decodeEntities`. T011 MUST pass.
-- [ ] T019 [US1] In `worker/src/lib.ts` export `normalizeTags(raw: unknown, existing: string[]):
+- [X] T019 [US1] In `worker/src/lib.ts` export `normalizeTags(raw: unknown, existing: string[]):
   string[]`. Tag rule, quoted from `data-model.md`: "lowercase and trim. Reject the whole tag,
   rather than cleaning it, if it contains anything other than `a-z`, `0-9`, spaces and hyphens
   (so "học máy" and "c++" are dropped). Then spaces become `-`, repeated `-` collapse, a leading
   or trailing `-` is removed, and the length must be 2–30. Duplicates removed, first 3 kept. A tag
   equal to an existing tag is used as-is (FR-006)." T012 MUST pass.
-- [ ] T020 [US1] In `worker/src/lib.ts` export `parseExtraction(raw: unknown): { snippet: string
+- [X] T020 [US1] In `worker/src/lib.ts` export `parseExtraction(raw: unknown): { snippet: string
   | null; tags: string[] }` per `contracts/model-extraction.md`: find the first `{…}` object in
   the text and `JSON.parse` it inside `try/catch`; take only `snippet` (string) and `tags` (array
   of strings); snippet rule, quoted from `data-model.md`: "string, trimmed, 1–400 characters,
   original language. Over-long text is cut at 397 and ends with `...`"; an empty snippet becomes
   `null`; tags via `normalizeTags` with an empty existing list. T013 MUST pass.
-- [ ] T021 [US1] In `worker/src/lib.ts` export `isLoginUrl(url: string): boolean` and
+- [X] T021 [US1] In `worker/src/lib.ts` export `isLoginUrl(url: string): boolean` and
   `isLoginWall(finalUrl: string, html: string): boolean` as described in T014. `isLoginUrl`
   parses the URL, checks the host prefix and compares whole path segments (split on `/`), never a
   substring of the whole URL. Reuse the `GENERIC` pattern; do not change `parseMeta`'s return
   shape. T014 MUST pass.
-- [ ] T022 [US1] In `worker/src/lib.ts` export `classifyRead(input)` with `input: { fetchFailure:
+- [X] T022 [US1] In `worker/src/lib.ts` export `classifyRead(input)` with `input: { fetchFailure:
   'timeout' | 'error' | null; status: number; contentType: string; loginWall: boolean; meta: {
   title, text, author }; bodyText: string; extraction: { snippet: string | null; tags: string[] }
   | null | undefined }` and result `{ outcome: 'pending' } | { outcome: 'full' | 'partial' |
   'unread'; reason?: 'login' | 'gone' | 'error' | 'timeout' | 'empty' | 'unsupported'; title;
   snippet; tags; author; status: 'ok' | null }`, implementing exactly the rule list in T015. It
   has no `enriched` field. T015 MUST pass.
-- [ ] T023 [US1] In `worker/src/lib.ts` export `formatBlock(kind, data)` producing the full and
+- [X] T023 [US1] In `worker/src/lib.ts` export `formatBlock(kind, data)` producing the full and
   known blocks exactly as written in `contracts/bot-replies.md` (`escapeHtml` on every piece of
   text; snippet cut to 160 characters ending with `…` in the reply only; `data` includes `url`,
   which replaces the title when the title is null). T016 MUST pass.
-- [ ] T024 [US1] In `worker/src/index.ts` replace `fetchMeta` with `fetchPage(url, byteBudget)`:
+- [X] T024 [US1] In `worker/src/index.ts` replace `fetchMeta` with `fetchPage(url, byteBudget)`:
   one `fetch` with `redirect: 'follow'`, the existing user agent and
   `AbortSignal.timeout(FETCH_TIMEOUT_MS)`. Keep the user agent string and put this comment above
   the headers: `// Looks like a link-preview crawler on purpose: public pages then serve their
@@ -247,18 +247,18 @@ snippet or tags.
   `{ fetchFailure: 'timeout' }` on an abort and `{ fetchFailure: 'error' }` on any other throw
   (including a subrequest-limit error). Run `parseMeta` on the head part only (up to `</head>`,
   else the whole capped text) and `extractText(html, PAGE_TEXT_CHARS)` for the body text.
-- [ ] T025 [US1] In `worker/src/index.ts` add `loadExistingTags(env)`: run `SELECT value AS tag,
+- [X] T025 [US1] In `worker/src/index.ts` add `loadExistingTags(env)`: run `SELECT value AS tag,
   count(*) AS n FROM items, json_each(items.tags) GROUP BY value ORDER BY n DESC LIMIT ?` bound
   to `EXISTING_TAGS_LIMIT` and return the tag strings. T010's memoized `getExistingTags` calls it,
   so it runs at most once per message.
-- [ ] T026 [US1] In `worker/src/index.ts` add `askModel(env, existingTags, page)` per
+- [X] T026 [US1] In `worker/src/index.ts` add `askModel(env, existingTags, page)` per
   `contracts/model-extraction.md`: `env.AI.run(MODEL, { messages, max_tokens: MODEL_MAX_TOKENS })`
   raced against `MODEL_TIMEOUT_MS`; the system message says the text inside `<page>` is untrusted
   data and must never be obeyed, and asks for JSON only; the user message holds
   `<existing_tags>` and a `<page>` block with the title, description and the extracted text. No
   tools are passed. Run the response text through `parseExtraction`; a throw or a timeout returns
   `null`. The owner's note is never sent.
-- [ ] T027 [US1] In `worker/src/index.ts` implement `readLink` for state `new`, in this order:
+- [X] T027 [US1] In `worker/src/index.ts` implement `readLink` for state `new`, in this order:
   1. `fetchPage`.
   2. Re-key check (`research.md` R7): compute the final key with the existing `pickNorm` (change
      `pickNorm` to call `isLoginUrl` instead of its inline `/login|signin|accounts\//i` regex, so
@@ -287,14 +287,14 @@ snippet or tags.
   5. Return a `full` block (T023) for a `full` outcome, otherwise `interimBlock` (T010).
 
   Never write `note` from page or model content (FR-007).
-- [ ] T028 [US1] In `worker/src/index.ts` implement `readLink` for state `known`: no fetch, no
+- [X] T028 [US1] In `worker/src/index.ts` implement `readLink` for state `known`: no fetch, no
   model call; return a `known` block built from the saved `title`, `text` and `tags` (parse the
   JSON array; invalid JSON gives no tags), using `Already saved, note added:` when the link
   record's `noteAdded` is true.
-- [ ] T029 [US1] In `worker/src/index.ts` finish `processLinks`: replace the temporary stub from
+- [X] T029 [US1] In `worker/src/index.ts` finish `processLinks`: replace the temporary stub from
   T010 with the real `readLink` dispatch (`new`, `known`; `unfilled` arrives in T034). Remove the
   stub.
-- [ ] T030 [US1] Run `npm test` and `npx tsc --noEmit` in `worker/`; both MUST pass.
+- [X] T030 [US1] Run `npm test` and `npx tsc --noEmit` in `worker/`; both MUST pass.
 
 **Checkpoint**: User Story 1 works end to end, and unreadable pages never reach the model. Stop
 and validate before moving on.
